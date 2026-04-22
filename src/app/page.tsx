@@ -1,104 +1,63 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EvaluationResult } from "@/lib/evaluate";
-import { LEVEL_LABELS, type PerformanceLevel } from "@/lib/rubric";
+import {
+  DIMENSIONS,
+  LEVEL_LABELS,
+  LEVEL_PALETTE,
+  PERFORMANCE_LEVELS,
+  TIMING,
+  type PerformanceLevel,
+} from "@/lib/rubric";
+import {
+  buildTranscriptSegments,
+  toSuperscript,
+} from "@/lib/highlights";
+import { DEMO_PITCH } from "@/lib/demoPitch";
 
-type Status =
-  | "idle"
-  | "recording"
-  | "recorded"
-  | "transcribing"
-  | "evaluating"
-  | "done"
-  | "error";
-
-const LEVEL_STYLES: Record<PerformanceLevel, string> = {
-  exceeds:
-    "bg-emerald-100 text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200",
-  meets: "bg-sky-100 text-sky-900 dark:bg-sky-950 dark:text-sky-200",
-  developing:
-    "bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-200",
-};
-
-function LevelBadge({ level }: { level: PerformanceLevel }) {
-  return (
-    <span
-      className={`inline-flex items-center rounded-full px-3 py-1 text-sm font-medium ${LEVEL_STYLES[level]}`}
-    >
-      {LEVEL_LABELS[level]}
-    </span>
-  );
-}
-
-function pickMimeType(): string {
-  if (typeof window === "undefined") return "";
-  const candidates = [
-    "audio/webm;codecs=opus",
-    "audio/webm",
-    "audio/mp4",
-    "audio/ogg;codecs=opus",
-  ];
-  for (const type of candidates) {
-    if (MediaRecorder.isTypeSupported(type)) return type;
-  }
-  return "";
-}
-
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
-}
+type Screen = "landing" | "recording" | "processing" | "results";
+type ProcessingStep = 0 | 1 | 2 | 3 | 4; // 4 = all done
 
 export default function Home() {
-  const [status, setStatus] = useState<Status>("idle");
-  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [screen, setScreen] = useState<Screen>("landing");
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
-  const [transcript, setTranscript] = useState<string | null>(null);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [result, setResult] = useState<EvaluationResult | null>(null);
+  const [processingStep, setProcessingStep] = useState<ProcessingStep>(0);
   const [error, setError] = useState<string | null>(null);
-
-  // Paste-instead fallback mode
-  const [pasteMode, setPasteMode] = useState(false);
-  const [pastedTranscript, setPastedTranscript] = useState("");
-  const [pastedDuration, setPastedDuration] = useState("60");
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const startedAtRef = useRef<number>(0);
   const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const procFakeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
 
   useEffect(() => {
     return () => {
       if (tickerRef.current) clearInterval(tickerRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       if (audioUrl) URL.revokeObjectURL(audioUrl);
+      procFakeTimersRef.current.forEach(clearTimeout);
     };
   }, [audioUrl]);
 
   function resetAll() {
     if (audioUrl) URL.revokeObjectURL(audioUrl);
-    setStatus("idle");
-    setElapsedSeconds(0);
     setAudioBlob(null);
     setAudioUrl(null);
-    setTranscript(null);
+    setElapsedSeconds(0);
     setResult(null);
     setError(null);
+    setProcessingStep(0);
+    procFakeTimersRef.current.forEach(clearTimeout);
+    procFakeTimersRef.current = [];
   }
 
   const startRecording = useCallback(async () => {
-    setError(null);
-    setResult(null);
-    setTranscript(null);
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
-    setAudioUrl(null);
-    setAudioBlob(null);
-    setElapsedSeconds(0);
-
+    resetAll();
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -118,24 +77,23 @@ export default function Home() {
         const blob = new Blob(chunksRef.current, { type });
         setAudioBlob(blob);
         setAudioUrl(URL.createObjectURL(blob));
-        setStatus("recorded");
       };
 
       recorder.start();
       startedAtRef.current = Date.now();
-      setStatus("recording");
+      setScreen("recording");
       tickerRef.current = setInterval(() => {
         setElapsedSeconds((Date.now() - startedAtRef.current) / 1000);
-      }, 100);
+      }, 80);
     } catch (err) {
       setError(
         err instanceof Error
           ? `Microphone access failed: ${err.message}`
           : "Microphone access failed.",
       );
-      setStatus("error");
     }
-  }, [audioUrl]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
@@ -146,420 +104,1162 @@ export default function Home() {
       clearInterval(tickerRef.current);
       tickerRef.current = null;
     }
-    setElapsedSeconds((Date.now() - startedAtRef.current) / 1000);
+    const finalElapsed = (Date.now() - startedAtRef.current) / 1000;
+    setElapsedSeconds(finalElapsed);
   }, []);
 
-  async function evaluateRecording() {
-    if (!audioBlob) return;
+  const cancelRecording = useCallback(() => {
+    if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      recorderRef.current.stop();
+    }
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    if (tickerRef.current) {
+      clearInterval(tickerRef.current);
+      tickerRef.current = null;
+    }
+    resetAll();
+    setScreen("landing");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  async function runFullPipeline(args: {
+    audioBlobForTranscribe: Blob | null;
+    presetTranscript: string | null;
+    durationSeconds: number;
+  }) {
     setError(null);
     setResult(null);
-    setStatus("transcribing");
+    setProcessingStep(0);
+    procFakeTimersRef.current.forEach(clearTimeout);
+    procFakeTimersRef.current = [];
+    setScreen("processing");
 
     try {
-      const ext = audioBlob.type.includes("mp4")
-        ? "mp4"
-        : audioBlob.type.includes("ogg")
-          ? "ogg"
-          : "webm";
-      const formData = new FormData();
-      formData.append("audio", audioBlob, `pitch.${ext}`);
+      let transcript: string;
 
-      const transcribeRes = await fetch("/api/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-      const transcribeData = await transcribeRes.json();
-      if (!transcribeRes.ok) {
-        throw new Error(transcribeData.error ?? "Transcription failed.");
+      if (args.presetTranscript != null) {
+        transcript = args.presetTranscript;
+        // Fake the transcribe step for UX continuity.
+        await sleep(900);
+        setProcessingStep(1);
+      } else if (args.audioBlobForTranscribe) {
+        const fd = new FormData();
+        const ext = pickExt(args.audioBlobForTranscribe.type);
+        fd.append(
+          "audio",
+          args.audioBlobForTranscribe,
+          `pitch.${ext}`,
+        );
+        const transcribeRes = await fetch("/api/transcribe", {
+          method: "POST",
+          body: fd,
+        });
+        const transcribeData = await transcribeRes.json();
+        if (!transcribeRes.ok) {
+          throw new Error(transcribeData.error ?? "Transcription failed.");
+        }
+        transcript = transcribeData.transcript;
+        setProcessingStep(1);
+      } else {
+        throw new Error("No audio or transcript provided.");
       }
-      setTranscript(transcribeData.transcript);
 
-      setStatus("evaluating");
+      // Fire off evaluate; during its wait, step UI advances on fake timers.
+      procFakeTimersRef.current.push(
+        setTimeout(() => setProcessingStep(2), 600),
+        setTimeout(() => setProcessingStep(3), 2400),
+      );
+
       const evaluateRes = await fetch("/api/evaluate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          transcript: transcribeData.transcript,
-          durationSeconds: elapsedSeconds,
+          transcript,
+          durationSeconds: args.durationSeconds,
         }),
       });
       const evaluateData = await evaluateRes.json();
       if (!evaluateRes.ok) {
         throw new Error(evaluateData.error ?? "Evaluation failed.");
       }
+
+      procFakeTimersRef.current.forEach(clearTimeout);
+      procFakeTimersRef.current = [];
+      setProcessingStep(4);
+      await sleep(350);
+
       setResult(evaluateData as EvaluationResult);
-      setStatus("done");
+      setScreen("results");
     } catch (err) {
+      procFakeTimersRef.current.forEach(clearTimeout);
+      procFakeTimersRef.current = [];
       setError(err instanceof Error ? err.message : String(err));
-      setStatus("error");
+      setScreen("landing");
     }
   }
 
-  async function evaluatePasted(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setError(null);
-    setResult(null);
-    setStatus("evaluating");
-    setTranscript(pastedTranscript);
-
-    try {
-      const evaluateRes = await fetch("/api/evaluate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          transcript: pastedTranscript,
-          durationSeconds: Number(pastedDuration),
-        }),
-      });
-      const evaluateData = await evaluateRes.json();
-      if (!evaluateRes.ok) {
-        throw new Error(evaluateData.error ?? "Evaluation failed.");
+  function onStopAndEvaluate() {
+    stopRecording();
+    // Wait one tick so onstop fires and audioBlob is ready.
+    setTimeout(() => {
+      const blob = chunksRef.current.length
+        ? new Blob(chunksRef.current, {
+            type: recorderRef.current?.mimeType || "audio/webm",
+          })
+        : audioBlob;
+      if (!blob) {
+        setError("No audio captured.");
+        setScreen("landing");
+        return;
       }
-      setResult(evaluateData as EvaluationResult);
-      setStatus("done");
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-      setStatus("error");
-    }
+      runFullPipeline({
+        audioBlobForTranscribe: blob,
+        presetTranscript: null,
+        durationSeconds: (Date.now() - startedAtRef.current) / 1000,
+      });
+    }, 100);
   }
 
-  const busy =
-    status === "recording" ||
-    status === "transcribing" ||
-    status === "evaluating";
+  function onDemoPitch() {
+    runFullPipeline({
+      audioBlobForTranscribe: null,
+      presetTranscript: DEMO_PITCH.transcript,
+      durationSeconds: DEMO_PITCH.durationSeconds,
+    });
+  }
+
+  async function onUploadAudio(file: File) {
+    // Estimate duration from audio metadata before sending.
+    const duration = await estimateAudioDuration(file);
+    runFullPipeline({
+      audioBlobForTranscribe: file,
+      presetTranscript: null,
+      durationSeconds: duration,
+    });
+  }
 
   return (
-    <div className="flex flex-1 flex-col bg-zinc-50 font-sans dark:bg-black">
-      <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-10 px-6 py-16 sm:px-8">
-        <header className="flex flex-col gap-3">
-          <h1 className="text-4xl font-semibold tracking-tight text-black dark:text-zinc-50">
-            Elevator Pitch Evaluator
-          </h1>
-          <p className="text-lg leading-7 text-zinc-600 dark:text-zinc-400">
-            Record a 60–90 second elevator pitch. Whisper transcribes it,
-            Claude coaches it against a five-dimension rubric.
-          </p>
-        </header>
+    <div className="mx-auto max-w-[960px] px-9 pt-10 pb-32 sm:px-9 max-sm:px-5 max-sm:pt-7 max-sm:pb-24">
+      <Topbar />
 
-        {pasteMode ? (
-          <PasteModeCard
-            transcript={pastedTranscript}
-            setTranscript={setPastedTranscript}
-            duration={pastedDuration}
-            setDuration={setPastedDuration}
-            onSubmit={evaluatePasted}
-            onBack={() => {
-              setPasteMode(false);
-              resetAll();
-            }}
-            busy={busy}
-          />
-        ) : (
-          <RecorderCard
-            status={status}
-            elapsedSeconds={elapsedSeconds}
-            audioUrl={audioUrl}
-            onStart={startRecording}
-            onStop={stopRecording}
-            onReRecord={() => {
-              resetAll();
-            }}
-            onEvaluate={evaluateRecording}
-            onSwitchToPaste={() => {
-              resetAll();
-              setPasteMode(true);
-            }}
-          />
-        )}
+      {screen === "landing" && (
+        <LandingScreen
+          error={error}
+          onStart={startRecording}
+          onDemo={onDemoPitch}
+          onUpload={onUploadAudio}
+        />
+      )}
 
-        {error ? (
-          <p className="rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800 dark:border-red-900 dark:bg-red-950 dark:text-red-200">
-            {error}
-          </p>
-        ) : null}
+      {screen === "recording" && (
+        <RecordingScreen
+          elapsedSeconds={elapsedSeconds}
+          onCancel={cancelRecording}
+          onStop={onStopAndEvaluate}
+        />
+      )}
 
-        {transcript ? <TranscriptView transcript={transcript} /> : null}
+      {screen === "processing" && (
+        <ProcessingScreen step={processingStep} />
+      )}
 
-        {result ? <ResultsView result={result} /> : null}
-      </main>
+      {screen === "results" && result && (
+        <ResultsScreen
+          result={result}
+          audioUrl={audioUrl}
+          onBack={() => {
+            resetAll();
+            setScreen("landing");
+          }}
+          onRecordAgain={startRecording}
+        />
+      )}
     </div>
   );
 }
 
-function RecorderCard({
-  status,
-  elapsedSeconds,
-  audioUrl,
+/* ------------------------------ Topbar ------------------------------ */
+
+function Topbar() {
+  return (
+    <div className="flex items-center justify-between pb-7 mb-12 border-b border-line-soft">
+      <div className="flex items-center gap-3 font-mono text-[11px] tracking-[0.14em] uppercase text-ink-dim">
+        <BrandMark />
+        <span>Elevator / Pitch / Evaluator</span>
+      </div>
+      <div className="hidden sm:flex gap-6 font-mono text-[11px] tracking-[0.14em] uppercase text-ink-mute">
+        <a href="#rubric" className="hover:text-ink">
+          Rubric
+        </a>
+        <a
+          href="https://github.com/IanHSDavis/elevator-pitch-evaluator"
+          target="_blank"
+          rel="noreferrer"
+          className="hover:text-ink"
+        >
+          Source
+        </a>
+      </div>
+    </div>
+  );
+}
+
+function BrandMark() {
+  return (
+    <div className="relative grid place-items-center w-[14px] h-[14px] rounded-[2px] bg-ink">
+      <div className="w-[4px] h-[8px] rounded-[1px] bg-bg" />
+    </div>
+  );
+}
+
+/* ---------------------------- Landing ---------------------------- */
+
+function LandingScreen({
+  error,
   onStart,
-  onStop,
-  onReRecord,
-  onEvaluate,
-  onSwitchToPaste,
+  onDemo,
+  onUpload,
 }: {
-  status: Status;
-  elapsedSeconds: number;
-  audioUrl: string | null;
+  error: string | null;
   onStart: () => void;
-  onStop: () => void;
-  onReRecord: () => void;
-  onEvaluate: () => void;
-  onSwitchToPaste: () => void;
+  onDemo: () => void;
+  onUpload: (file: File) => void;
 }) {
-  const isRecording = status === "recording";
-  const isRecorded = status === "recorded";
-  const isProcessing = status === "transcribing" || status === "evaluating";
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   return (
-    <div className="flex flex-col gap-5 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-          {status === "idle" && "Ready to record"}
-          {isRecording && "Recording…"}
-          {isRecorded && "Recording complete"}
-          {status === "transcribing" && "Transcribing audio…"}
-          {status === "evaluating" && "Evaluating pitch…"}
-          {status === "done" && "Evaluation complete"}
-          {status === "error" && "Error — try again"}
-        </span>
-        <span className="font-mono text-sm tabular-nums text-zinc-500 dark:text-zinc-500">
-          {formatElapsed(elapsedSeconds)}
-        </span>
+    <main className="fade-in">
+      <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+        A Coaching Instrument · v0.4
       </div>
 
-      {isRecording ? (
-        <div className="flex items-center gap-3 rounded-lg bg-red-50 p-3 dark:bg-red-950/40">
-          <span className="relative flex h-3 w-3">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-red-400 opacity-75" />
-            <span className="relative inline-flex h-3 w-3 rounded-full bg-red-500" />
-          </span>
-          <span className="text-sm text-red-800 dark:text-red-200">
-            Recording in progress — aim for 45–90 seconds.
-          </span>
+      <div className="mt-7 grid grid-cols-[1fr_auto] gap-10 items-end max-sm:grid-cols-1 max-sm:gap-6">
+        <h1 className="font-serif m-0 text-[88px] leading-[0.95] tracking-[-0.025em] font-normal max-sm:text-[64px]">
+          Say it
+          <br />
+          in <em className="text-ink-dim">sixty</em>
+          <br />
+          seconds.
+        </h1>
+        <div className="font-mono text-[11px] tracking-[0.14em] uppercase text-ink-faint leading-[1.9] text-right max-sm:text-left">
+          Target 60–90s
+          <br />
+          Whisper · transcribe
+          <br />
+          Claude · evaluate
         </div>
-      ) : null}
-
-      {isRecorded && audioUrl ? (
-        <audio
-          controls
-          src={audioUrl}
-          className="w-full"
-          preload="metadata"
-        />
-      ) : null}
-
-      <div className="flex flex-wrap gap-3">
-        {status === "idle" || status === "error" ? (
-          <button
-            type="button"
-            onClick={onStart}
-            className="inline-flex items-center justify-center gap-2 rounded-full bg-red-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700"
-          >
-            <span className="inline-block h-2 w-2 rounded-full bg-white" />
-            Start recording
-          </button>
-        ) : null}
-
-        {isRecording ? (
-          <button
-            type="button"
-            onClick={onStop}
-            className="inline-flex items-center justify-center rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-          >
-            Stop
-          </button>
-        ) : null}
-
-        {isRecorded ? (
-          <>
-            <button
-              type="button"
-              onClick={onEvaluate}
-              className="inline-flex items-center justify-center rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-            >
-              Evaluate this pitch
-            </button>
-            <button
-              type="button"
-              onClick={onReRecord}
-              className="inline-flex items-center justify-center rounded-full border border-zinc-300 bg-transparent px-5 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-            >
-              Re-record
-            </button>
-          </>
-        ) : null}
-
-        {isProcessing ? (
-          <button
-            type="button"
-            disabled
-            className="inline-flex cursor-not-allowed items-center justify-center rounded-full bg-zinc-400 px-5 py-2.5 text-sm font-medium text-white dark:bg-zinc-700"
-          >
-            {status === "transcribing" ? "Transcribing…" : "Evaluating…"}
-          </button>
-        ) : null}
       </div>
 
-      {status === "idle" ? (
-        <button
-          type="button"
-          onClick={onSwitchToPaste}
-          className="self-start text-sm text-zinc-500 underline-offset-2 hover:underline"
-        >
-          Paste a transcript instead
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function PasteModeCard({
-  transcript,
-  setTranscript,
-  duration,
-  setDuration,
-  onSubmit,
-  onBack,
-  busy,
-}: {
-  transcript: string;
-  setTranscript: (value: string) => void;
-  duration: string;
-  setDuration: (value: string) => void;
-  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
-  onBack: () => void;
-  busy: boolean;
-}) {
-  return (
-    <form
-      onSubmit={onSubmit}
-      className="flex flex-col gap-4 rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
-    >
-      <label className="flex flex-col gap-2">
-        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-          Pitch transcript
-        </span>
-        <textarea
-          required
-          value={transcript}
-          onChange={(e) => setTranscript(e.target.value)}
-          rows={10}
-          placeholder="Paste what the speaker said."
-          className="w-full rounded-lg border border-zinc-300 bg-white p-3 text-sm text-black placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100 dark:placeholder:text-zinc-600"
-        />
-      </label>
-      <label className="flex flex-col gap-2">
-        <span className="text-sm font-medium text-zinc-800 dark:text-zinc-200">
-          Pitch duration (seconds)
-        </span>
-        <input
-          required
-          type="number"
-          min={1}
-          value={duration}
-          onChange={(e) => setDuration(e.target.value)}
-          className="w-32 rounded-lg border border-zinc-300 bg-white p-2 text-sm text-black focus:border-zinc-500 focus:outline-none dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100"
-        />
-      </label>
-      <div className="flex gap-3">
-        <button
-          type="submit"
-          disabled={busy || transcript.trim().length === 0}
-          className="inline-flex items-center justify-center rounded-full bg-black px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-white dark:text-black dark:hover:bg-zinc-200"
-        >
-          {busy ? "Evaluating…" : "Evaluate pitch"}
-        </button>
-        <button
-          type="button"
-          onClick={onBack}
-          className="inline-flex items-center justify-center rounded-full border border-zinc-300 px-5 py-2.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-900"
-        >
-          Back to recording
-        </button>
-      </div>
-    </form>
-  );
-}
-
-function TranscriptView({ transcript }: { transcript: string }) {
-  return (
-    <section className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-      <h2 className="text-sm font-semibold uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-        Transcript
-      </h2>
-      <p className="mt-3 whitespace-pre-wrap text-base leading-7 text-zinc-700 dark:text-zinc-300">
-        {transcript}
+      <p className="mt-7 max-w-[48ch] text-[18px] leading-[1.55] font-light text-ink-dim m-0">
+        Record an elevator pitch. We transcribe it, score it against a
+        five-dimension rubric, and hand back blunt coaching notes — line by
+        line. No cheerleading.
       </p>
-    </section>
+
+      <RubricStrip />
+
+      <MatrixAccordion
+        id="rubric"
+        eyebrow="The Rubric · Full Matrix"
+        label="See what each dimension looks like at Exceeds, Meets, Developing."
+        sub="Scoring is a gradient, not pass/fail. Expand to read the criteria."
+        defaultOpen={false}
+      />
+
+      <div className="mt-[88px] grid grid-cols-2 gap-14 items-center max-[820px]:grid-cols-1 max-[820px]:gap-10">
+        <div className="flex flex-col items-start gap-7">
+          <RecordButton onClick={onStart} />
+          <div className="flex flex-col gap-2.5">
+            <div className="font-serif text-[40px] leading-[1.02] tracking-[-0.01em]">
+              Press to <em className="text-ink-dim">record.</em>
+            </div>
+            <div className="text-[13.5px] text-ink-mute max-w-[34ch] leading-[1.5]">
+              Grant microphone access when asked. Stop any time — we'll only
+              judge what you give us.
+            </div>
+          </div>
+          <div className="flex gap-6 mt-1.5 font-mono text-[11px] tracking-[0.12em] uppercase">
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink"
+            >
+              Upload audio instead
+            </button>
+            <button
+              type="button"
+              onClick={onDemo}
+              className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink"
+            >
+              Try a demo pitch
+            </button>
+          </div>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="audio/*"
+            hidden
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) onUpload(file);
+              e.target.value = "";
+            }}
+          />
+        </div>
+
+        <SpecsTable />
+      </div>
+
+      {error && (
+        <div className="mt-10 border border-[color-mix(in_oklch,var(--dev)_40%,transparent)] bg-[color-mix(in_oklch,var(--dev)_6%,transparent)] text-ink px-5 py-4 text-sm rounded">
+          {error}
+        </div>
+      )}
+
+      <div className="mt-[100px] pt-8 border-t border-line-soft flex justify-between items-end gap-6 font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint max-sm:flex-col max-sm:items-start max-sm:gap-3">
+        <div>Ver 0.5.0 · Built for practice, not performance.</div>
+        <div>claude-opus-4-7</div>
+      </div>
+    </main>
   );
 }
 
-function ResultsView({ result }: { result: EvaluationResult }) {
+function RubricStrip() {
+  const cells = [
+    ...DIMENSIONS.map((d) => ({
+      num: String(d.index).padStart(2, "0"),
+      title: d.shortLabel,
+      sub: d.shortSub,
+    })),
+    {
+      num: "05",
+      title: TIMING.shortLabel,
+      sub: TIMING.shortSub,
+    },
+  ];
+
   return (
-    <section className="flex flex-col gap-6">
-      <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
-          Overall impression
-        </h2>
-        <p className="mt-3 text-base leading-7 text-zinc-700 dark:text-zinc-300">
-          {result.overallImpression}
-        </p>
-      </div>
-
-      <div className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h3 className="text-lg font-semibold text-black dark:text-zinc-50">
-              {result.timing.title}
-            </h3>
-            <p className="mt-1 text-sm text-zinc-600 dark:text-zinc-400">
-              {result.timing.note}
-            </p>
-          </div>
-          <LevelBadge level={result.timing.level} />
-        </div>
-      </div>
-
-      {result.dimensions.map((dim) => (
+    <div className="mt-[72px] grid grid-cols-5 border-t border-b border-line-soft max-sm:grid-cols-2">
+      {cells.map((c, i) => (
         <div
-          key={dim.key}
-          className="rounded-2xl border border-zinc-200 bg-white p-6 shadow-sm dark:border-zinc-800 dark:bg-zinc-950"
+          key={c.num}
+          className={`p-[22px_20px] min-h-[130px] flex flex-col justify-between ${
+            i < cells.length - 1 ? "border-r border-line-soft" : ""
+          } max-sm:[&:nth-child(2n)]:border-r-0 max-sm:border-b max-sm:border-line-soft`}
         >
-          <div className="flex items-start justify-between gap-4">
-            <h3 className="text-lg font-semibold text-black dark:text-zinc-50">
-              {dim.title}
-            </h3>
-            <LevelBadge level={dim.level} />
+          <div className="font-mono text-[11px] text-ink-faint tracking-[0.12em]">
+            {c.num}
           </div>
-
-          <div className="mt-4 flex flex-col gap-3">
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-                Evidence
-              </p>
-              <p className="mt-1 text-sm italic text-zinc-600 dark:text-zinc-400">
-                {dim.evidence}
-              </p>
+          <div>
+            <div className="text-[15px] font-medium leading-[1.3] text-ink">
+              {c.title}
             </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-zinc-500 dark:text-zinc-500">
-                Coaching
-              </p>
-              <p className="mt-1 text-base leading-7 text-zinc-800 dark:text-zinc-200">
-                {dim.coaching}
-              </p>
+            <div className="text-[12.5px] text-ink-mute leading-[1.4] mt-1.5">
+              {c.sub}
             </div>
           </div>
         </div>
       ))}
-
-      <p className="text-xs text-zinc-500 dark:text-zinc-600">
-        Model: {result.model} · Tokens in/out: {result.usage.inputTokens}/
-        {result.usage.outputTokens}
-        {result.usage.cacheReadInputTokens !== null &&
-        result.usage.cacheReadInputTokens > 0
-          ? ` · Cache hit: ${result.usage.cacheReadInputTokens} tokens`
-          : ""}
-      </p>
-    </section>
+    </div>
   );
+}
+
+function RecordButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Start recording"
+      className="relative w-40 h-40 rounded-full bg-ink grid place-items-center border-0 cursor-pointer transition-[transform,background] duration-200 hover:scale-[1.03] hover:bg-[oklch(0.48_0.17_30)] shadow-[0_20px_50px_-24px_oklch(0.30_0.06_60/0.45)] group"
+    >
+      <div className="absolute -inset-3 rounded-full border border-line opacity-60 pointer-events-none" />
+      <div className="absolute -inset-6 rounded-full border border-dashed border-line opacity-35 animate-slowspin pointer-events-none" />
+      <div className="w-7 h-7 rounded-full bg-[oklch(0.48_0.17_30)] transition-all duration-200 group-hover:bg-bg group-hover:w-8 group-hover:h-8" />
+    </button>
+  );
+}
+
+function SpecsTable() {
+  const rows = [
+    { k: "Length", v: "60–90 seconds", e: "· ±15s tolerated" },
+    { k: "Format", v: "Spoken pitch", e: "· one take" },
+    {
+      k: "Privacy",
+      v: "Audio to Whisper, transcript to Claude",
+      e: "· nothing stored",
+    },
+    { k: "Scoring", v: "Exceeds · Meets · Developing", e: null },
+    {
+      k: "Output",
+      v: "Transcript · 5 dimension scores · coaching notes",
+      e: null,
+    },
+  ];
+
+  return (
+    <div className="flex flex-col border-l border-line-soft pl-7">
+      {rows.map((r, i) => (
+        <div
+          key={r.k}
+          className={`grid grid-cols-[110px_1fr] gap-5 py-3.5 text-[13px] ${
+            i < rows.length - 1 ? "border-b border-line-soft" : ""
+          }`}
+        >
+          <div className="font-mono text-[10.5px] text-ink-faint tracking-[0.14em] uppercase pt-0.5">
+            {r.k}
+          </div>
+          <div className="text-ink leading-[1.5]">
+            {r.v}
+            {r.e && <span className="text-ink-mute"> {r.e}</span>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ---------------------------- Matrix accordion ---------------------------- */
+
+function MatrixAccordion({
+  id,
+  eyebrow,
+  label,
+  sub,
+  defaultOpen,
+}: {
+  id?: string;
+  eyebrow: string;
+  label: string;
+  sub: string;
+  defaultOpen: boolean;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+
+  return (
+    <div
+      id={id}
+      className="mt-12 border-t border-b border-line-soft"
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="w-full bg-transparent border-0 text-ink p-[22px_0] flex justify-between items-center gap-4 font-inherit cursor-pointer text-left"
+      >
+        <div className="flex flex-col gap-1">
+          <div className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-ink-faint">
+            {eyebrow}
+          </div>
+          <div className="text-[17px] font-medium tracking-[-0.005em]">
+            {label}
+          </div>
+          <div className="text-[13px] text-ink-mute font-light">{sub}</div>
+        </div>
+        <div
+          className="w-7 h-7 border border-line rounded-full grid place-items-center text-ink-dim transition-transform duration-200"
+          style={{ transform: open ? "rotate(180deg)" : "rotate(0deg)" }}
+        >
+          <svg
+            width="12"
+            height="8"
+            viewBox="0 0 12 8"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
+            <path d="M1 1l5 5 5-5" />
+          </svg>
+        </div>
+      </button>
+      <div
+        className="overflow-hidden transition-[max-height] duration-[440ms] ease-[cubic-bezier(.2,.8,.2,1)]"
+        style={{ maxHeight: open ? "2400px" : "0px" }}
+      >
+        <div className="pt-2 pb-9">
+          <Matrix />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Matrix() {
+  const headers: { text: string; cls: string }[] = [
+    { text: "Dimension", cls: "text-ink-faint" },
+    { text: "Exceeds", cls: "text-strong" },
+    { text: "Meets", cls: "text-meets" },
+    { text: "Developing", cls: "text-dev" },
+  ];
+  const rows = [
+    ...DIMENSIONS.map((d) => ({
+      num: String(d.index).padStart(2, "0"),
+      title: d.title,
+      cells: PERFORMANCE_LEVELS.map((lvl) => d.descriptors[lvl]),
+    })),
+    {
+      num: "05",
+      title: TIMING.title,
+      cells: PERFORMANCE_LEVELS.map((lvl) => TIMING.descriptors[lvl]),
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-[minmax(150px,1fr)_1.6fr_1.6fr_1.6fr] border-t border-line-soft max-[820px]:grid-cols-1">
+      {headers.map((h) => (
+        <div
+          key={h.text}
+          className={`font-mono text-[10.5px] tracking-[0.16em] uppercase font-medium py-3.5 pr-5 ${h.cls} first:pl-0 max-[820px]:hidden`}
+        >
+          {h.text}
+        </div>
+      ))}
+      {rows.map((row) => (
+        <RowCells key={row.num} row={row} />
+      ))}
+    </div>
+  );
+}
+
+function RowCells({
+  row,
+}: {
+  row: { num: string; title: string; cells: string[] };
+}) {
+  return (
+    <>
+      <div className="text-[14px] leading-[1.55] py-[18px] pr-5 border-b border-line-soft font-medium text-ink max-[820px]:pt-5 max-[820px]:pb-1 max-[820px]:border-t max-[820px]:border-b-0 max-[820px]:border-t-line-soft">
+        <span className="block font-mono text-[10.5px] text-ink-faint tracking-[0.12em] mb-1 font-normal">
+          {row.num}
+        </span>
+        {row.title}
+      </div>
+      {row.cells.map((cell, i) => (
+        <div
+          key={i}
+          data-label={
+            i === 0 ? "Exceeds" : i === 1 ? "Meets" : "Developing"
+          }
+          className="text-[14px] leading-[1.55] py-[18px] pr-6 border-b border-line-soft text-ink-dim italic font-light max-[820px]:py-2.5 max-[820px]:border-b-0 max-[820px]:before:content-[attr(data-label)] max-[820px]:before:block max-[820px]:before:font-mono max-[820px]:before:text-[10px] max-[820px]:before:tracking-[0.14em] max-[820px]:before:uppercase max-[820px]:before:text-ink-faint max-[820px]:before:mb-1 max-[820px]:before:not-italic"
+        >
+          {cell}
+        </div>
+      ))}
+    </>
+  );
+}
+
+/* ---------------------------- Recording ---------------------------- */
+
+function RecordingScreen({
+  elapsedSeconds,
+  onCancel,
+  onStop,
+}: {
+  elapsedSeconds: number;
+  onCancel: () => void;
+  onStop: () => void;
+}) {
+  const secs = Math.floor(elapsedSeconds);
+  const ms = Math.floor((elapsedSeconds - secs) * 100);
+  const timerText = `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+  const msText = `.${String(ms).padStart(2, "0")}`;
+  const fillPct = Math.min(100, (elapsedSeconds / 90) * 100);
+
+  return (
+    <main className="fade-in mt-16">
+      <div className="flex items-center gap-3.5 mb-12">
+        <div className="w-2.5 h-2.5 rounded-full animate-pulse-soft bg-[oklch(0.68_0.16_25)]" />
+        <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-dim">
+          Recording · Mic Live
+        </div>
+        <div className="ml-auto font-serif text-[72px] leading-none tracking-[-0.02em] tabular-nums">
+          {timerText}
+          <span className="text-[28px] text-ink-mute align-[6px] ml-1.5">
+            {msText}
+          </span>
+        </div>
+      </div>
+
+      <Waveform />
+
+      <div className="flex justify-between items-center font-mono text-[11px] tracking-[0.14em] uppercase text-ink-mute mt-10 max-sm:flex-col max-sm:items-start max-sm:gap-3">
+        <div className="flex gap-2.5 items-center">
+          <span>Target Window</span>
+          <div className="w-60 h-0.5 bg-line relative overflow-hidden rounded-[1px]">
+            <div className="absolute -top-[3px] -bottom-[3px] w-px bg-ink-dim left-[40%]" />
+            <div className="absolute -top-[3px] -bottom-[3px] w-px bg-ink-dim left-[60%]" />
+            <div
+              className="absolute inset-0 bg-ink transition-[width] duration-[120ms] linear rounded-[1px]"
+              style={{ width: `${fillPct}%` }}
+            />
+          </div>
+          <span>{secs} / 90s</span>
+        </div>
+        <div>60–90s · ideal</div>
+      </div>
+
+      <div className="flex gap-3.5 mt-14 justify-center">
+        <Button variant="ghost" onClick={onCancel}>
+          Cancel
+        </Button>
+        <Button variant="primary" onClick={onStop}>
+          <span className="inline-block w-2.5 h-2.5 bg-current" />
+          Stop &amp; Evaluate
+        </Button>
+      </div>
+    </main>
+  );
+}
+
+function Waveform() {
+  const WAVE_COUNT = 120;
+  const [bars, setBars] = useState<number[]>(() =>
+    new Array(WAVE_COUNT).fill(3),
+  );
+  const headRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const startRef = useRef(performance.now());
+
+  useEffect(() => {
+    const tick = () => {
+      const t = (performance.now() - startRef.current) / 1000;
+      const amp = Math.max(
+        4,
+        Math.abs(Math.sin(t * 6) * 60) + Math.random() * 50 + 10,
+      );
+
+      setBars((prev) => {
+        const next = prev.slice();
+        if (headRef.current < next.length) {
+          next[headRef.current] = amp;
+        } else {
+          for (let i = 0; i < next.length - 1; i++) next[i] = next[i + 1];
+          next[next.length - 1] = amp;
+        }
+        headRef.current++;
+        return next;
+      });
+
+      rafRef.current = requestAnimationFrame(tick);
+    };
+    rafRef.current = requestAnimationFrame(tick);
+    return () => {
+      if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    };
+  }, []);
+
+  return (
+    <div className="h-[220px] flex items-center gap-[3px] border-t border-b border-line-soft my-10 relative">
+      <div className="absolute left-0 right-0 top-1/2 h-px bg-line-soft" />
+      {bars.map((h, i) => {
+        const isPast =
+          headRef.current > bars.length &&
+          i < bars.length - 30;
+        return (
+          <div
+            key={i}
+            className={`flex-1 ${isPast ? "bg-ink-mute" : "bg-ink"} min-h-[2px] rounded-[1px] transition-[height] duration-[80ms] ease-out`}
+            style={{ height: `${h}%` }}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+/* ---------------------------- Processing ---------------------------- */
+
+function ProcessingScreen({ step }: { step: ProcessingStep }) {
+  const steps = [
+    "Transcribing audio via Whisper",
+    "Parsing structure & timing",
+    "Scoring against the five-dimension rubric",
+    "Writing coaching notes",
+  ];
+
+  return (
+    <main className="fade-in mt-16">
+      <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+        Evaluating
+      </div>
+      <div className="font-serif text-[56px] leading-[1.02] tracking-[-0.015em] max-w-[18ch] mt-6 max-sm:text-[40px]">
+        Listening closely.{" "}
+        <em className="text-ink-dim">Give us a moment.</em>
+      </div>
+
+      <div className="mt-14 flex flex-col border-t border-line-soft">
+        {steps.map((s, i) => {
+          const state =
+            step > i ? "done" : step === i ? "active" : "queued";
+          return (
+            <div
+              key={i}
+              className={`grid grid-cols-[40px_1fr_auto] gap-6 py-[22px] border-b border-line-soft items-center`}
+            >
+              <div className="font-mono text-[11px] text-ink-faint tracking-[0.12em]">
+                {String(i + 1).padStart(2, "0")}
+              </div>
+              <div
+                className={`text-[15px] ${
+                  state === "active"
+                    ? "text-ink"
+                    : state === "done"
+                      ? "text-ink-mute"
+                      : "text-ink-dim"
+                }`}
+              >
+                {s}
+              </div>
+              <div
+                className={`font-mono text-[11px] tracking-[0.12em] uppercase flex items-center gap-2.5 ${
+                  state === "active"
+                    ? "text-ink"
+                    : state === "done"
+                      ? "text-strong"
+                      : "text-ink-faint"
+                }`}
+              >
+                {state === "queued"
+                  ? "Queued"
+                  : state === "active"
+                    ? "Working"
+                    : "Done"}
+                {state === "active" && (
+                  <span className="inline-block w-2 h-2 rounded-full bg-ink animate-pulse-soft" />
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </main>
+  );
+}
+
+/* ---------------------------- Results ---------------------------- */
+
+function ResultsScreen({
+  result,
+  audioUrl,
+  onBack,
+  onRecordAgain,
+}: {
+  result: EvaluationResult;
+  audioUrl: string | null;
+  onBack: () => void;
+  onRecordAgain: () => void;
+}) {
+  const [copyLabel, setCopyLabel] = useState("Copy Report");
+  const [activeRef, setActiveRef] = useState<number | null>(null);
+
+  const segments = useMemo(() => {
+    const highlights = result.dimensions
+      .filter((d) => d.highlight && d.highlight.trim().length > 0)
+      .map((d) => ({ phrase: d.highlight, ref: d.index }));
+    return buildTranscriptSegments(result.transcript, highlights);
+  }, [result]);
+
+  const wordCount = useMemo(
+    () =>
+      result.transcript
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean).length,
+    [result.transcript],
+  );
+
+  const sessionId = useMemo(
+    () => String(Math.floor(Math.random() * 9000) + 1000),
+    [],
+  );
+  const timestamp = useMemo(() => formatTimestamp(new Date()), []);
+
+  function onMarkClick(ref: number) {
+    setActiveRef(ref);
+    const row = document.getElementById(`row-${ref}`);
+    if (row) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+      row.animate(
+        [
+          {
+            background: "color-mix(in oklch, var(--dev) 10%, transparent)",
+          },
+          { background: "transparent" },
+        ],
+        { duration: 1200, easing: "ease-out" },
+      );
+    }
+  }
+
+  async function onCopy() {
+    const text = buildPlaintextReport(result);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyLabel("Copied");
+      setTimeout(() => setCopyLabel("Copy Report"), 1400);
+    } catch {
+      setCopyLabel("Copy failed");
+      setTimeout(() => setCopyLabel("Copy Report"), 1400);
+    }
+  }
+
+  return (
+    <main className="fade-in">
+      <div className="flex justify-between items-center gap-4 pb-7 border-b border-line-soft">
+        <button
+          type="button"
+          onClick={onBack}
+          className="group font-mono text-[11px] tracking-[0.14em] uppercase text-ink-dim bg-transparent border-0 p-0 cursor-pointer inline-flex items-center gap-2 hover:text-ink"
+        >
+          <span className="inline-block transition-transform duration-200 group-hover:-translate-x-[3px]">
+            ←
+          </span>{" "}
+          Back to record
+        </button>
+        <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+          Session · {sessionId} · {timestamp}
+        </div>
+      </div>
+
+      {/* Verdict + score */}
+      <div className="grid grid-cols-[1fr_auto] gap-10 items-end pt-[72px] pb-14 border-b border-line-soft max-sm:grid-cols-1 max-sm:gap-6">
+        <div className="flex flex-col gap-5 self-end">
+          <h2 className="font-serif text-[64px] leading-[1.02] tracking-[-0.018em] max-w-[16ch] m-0 max-sm:text-[44px]">
+            {result.verdict}
+          </h2>
+          <div className="font-mono text-[11px] tracking-[0.14em] uppercase text-ink-mute">
+            Overall · {LEVEL_LABELS[result.verdictLevel]} ·{" "}
+            {result.verdictMet.met} of {result.verdictMet.total} dimensions
+            meet
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <div className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-ink-faint">
+            Overall
+          </div>
+          <div className="font-serif text-[140px] leading-[0.9] tracking-[-0.03em] tabular-nums flex items-baseline gap-0.5 max-sm:text-[104px]">
+            <span>{result.overallScore}</span>
+            <span className="text-[38px] text-ink-mute leading-none">
+              /100
+            </span>
+          </div>
+          <div className="w-[180px] h-1 bg-line mt-2.5 relative rounded-[2px] overflow-hidden">
+            <div
+              className="absolute inset-0 bg-ink rounded-[2px] transition-[width] duration-[900ms] ease-[cubic-bezier(.2,.8,.2,1)]"
+              style={{ width: `${result.overallScore}%` }}
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Overall impression */}
+      <section className="pt-7 pb-10 border-b border-line-soft">
+        <div className="flex justify-between items-baseline pt-5 pb-4.5 border-b border-line-soft">
+          <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+            Overall Impression
+          </div>
+          <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+            {result.verdictMet.total - result.verdictMet.met} of{" "}
+            {result.verdictMet.total} dimensions need work
+          </div>
+        </div>
+        <p className="mt-6 text-[17px] leading-[1.65] text-ink max-w-[70ch] font-light">
+          {result.overallImpression}
+        </p>
+      </section>
+
+      {/* Transcript */}
+      <section>
+        <div className="flex justify-between items-baseline pt-9 pb-4.5 border-b border-line-soft">
+          <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+            Transcript
+          </div>
+          <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+            {Math.round(result.timing.durationSeconds)}s · {wordCount} words
+            · click a highlight to see the note
+          </div>
+        </div>
+
+        <p className="transcript pt-7 pb-2 text-[22px] leading-[1.55] font-light tracking-[-0.005em] text-ink max-sm:text-[18px]">
+          {segments.map((seg, i) =>
+            seg.ref != null ? (
+              <mark
+                key={i}
+                data-ref={seg.ref}
+                onClick={() => onMarkClick(seg.ref!)}
+                className={activeRef === seg.ref ? "active" : ""}
+              >
+                {seg.text}
+                <span className="ref">{toSuperscript(seg.ref)}</span>
+              </mark>
+            ) : (
+              <span key={i}>{seg.text}</span>
+            ),
+          )}
+        </p>
+
+        <div className="flex gap-6 pt-3.5 font-mono text-[10.5px] tracking-[0.12em] uppercase text-ink-faint max-sm:flex-col max-sm:gap-2">
+          <span className="inline-flex items-center gap-2 before:content-[''] before:inline-block before:w-2.5 before:h-2.5 before:bg-[var(--hl-bg)] before:border-b before:border-dev">
+            Highlighted = referenced in coaching
+          </span>
+          <span className="ml-auto max-sm:ml-0">Click to jump to the note</span>
+        </div>
+
+        {audioUrl && (
+          <div className="mt-7 p-6 bg-bg-elev border border-line-soft rounded flex items-center gap-5">
+            <audio controls src={audioUrl} className="w-full" preload="metadata" />
+          </div>
+        )}
+      </section>
+
+      {/* Dimensions */}
+      <section>
+        <div className="flex justify-between items-baseline pt-9 pb-4.5 border-b border-line-soft">
+          <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+            The Five Dimensions
+          </div>
+          <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+            Scored + coached
+          </div>
+        </div>
+
+        <div className="pt-6">
+          {/* Timing — compact */}
+          <div
+            id="row-5"
+            className="grid grid-cols-[34px_1fr_auto] gap-7 py-8 border-b border-line-soft items-start max-sm:grid-cols-[28px_1fr] max-sm:grid-rows-[auto_auto]"
+          >
+            <div className="font-mono text-[11px] text-ink-faint tracking-[0.12em] pt-1">
+              00
+            </div>
+            <div className="flex items-baseline gap-3.5 flex-wrap">
+              <div className="text-[17px] font-medium">{result.timing.title}</div>
+              <div className="font-mono text-[12px] text-ink-dim tracking-[0.04em]">
+                {result.timing.note}
+              </div>
+            </div>
+            <div className="flex flex-col items-end gap-2.5 max-sm:col-span-2 max-sm:flex-row max-sm:items-center">
+              <Badge level={result.timing.level} label={result.timing.badgeLabel} />
+            </div>
+          </div>
+
+          {result.dimensions.map((dim) => (
+            <div
+              key={dim.key}
+              id={`row-${dim.index}`}
+              className="grid grid-cols-[34px_1fr_auto] gap-7 py-8 border-b border-line-soft items-start max-sm:grid-cols-[28px_1fr] max-sm:grid-rows-[auto_auto]"
+            >
+              <div className="font-mono text-[11px] text-ink-faint tracking-[0.12em] pt-1">
+                {String(dim.index).padStart(2, "0")}
+              </div>
+              <div className="flex flex-col gap-3.5 min-w-0">
+                <div className="text-[22px] font-medium leading-[1.2] tracking-[-0.01em]">
+                  {dim.title}
+                </div>
+                <div className="text-[14px] text-ink-dim italic leading-[1.55] border-l-2 border-line pl-3.5">
+                  {dim.evidence}
+                </div>
+                <div className="text-[15px] leading-[1.6] text-ink max-w-[68ch]">
+                  {dim.coaching}
+                </div>
+              </div>
+              <div className="flex flex-col items-end gap-2.5 max-sm:col-span-2 max-sm:flex-row max-sm:items-center">
+                <Badge level={dim.level} />
+                <div className="font-serif text-[32px] leading-none tabular-nums text-ink">
+                  {dim.subscore}
+                  <span className="text-[14px] text-ink-mute">/5</span>
+                </div>
+                <div className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-faint">
+                  Weight · {Math.round(dim.weight * 100)}%
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <MatrixAccordion
+        eyebrow="Reference · Full Rubric"
+        label="Compare your scores against the criteria."
+        sub="What Exceeds, Meets, and Developing look like per dimension."
+        defaultOpen={false}
+      />
+
+      <div className="mt-16 pt-8 border-t border-line-soft flex justify-between items-center gap-5 flex-wrap">
+        <div className="font-mono text-[10.5px] tracking-[0.12em] text-ink-faint uppercase">
+          Model {result.model} · Tokens in/out {result.usage.inputTokens}/
+          {result.usage.outputTokens}
+          {result.usage.cacheReadInputTokens &&
+          result.usage.cacheReadInputTokens > 0
+            ? ` · Cache hit ${result.usage.cacheReadInputTokens}`
+            : ""}
+        </div>
+        <div className="flex gap-3 flex-wrap">
+          <Button variant="ghost" onClick={onCopy}>
+            {copyLabel}
+          </Button>
+          <Button variant="default" onClick={onBack}>
+            New Recording
+          </Button>
+          <Button variant="primary" onClick={onRecordAgain}>
+            Record Again →
+          </Button>
+        </div>
+      </div>
+    </main>
+  );
+}
+
+/* ---------------------------- Common bits ---------------------------- */
+
+function Badge({
+  level,
+  label,
+}: {
+  level: PerformanceLevel;
+  label?: string;
+}) {
+  const palette = LEVEL_PALETTE[level];
+  const tone =
+    palette === "strong"
+      ? "text-strong bg-[color-mix(in_oklch,var(--strong)_14%,transparent)]"
+      : palette === "meets"
+        ? "text-meets bg-[color-mix(in_oklch,var(--meets)_14%,transparent)]"
+        : "text-dev bg-[color-mix(in_oklch,var(--dev)_14%,transparent)]";
+  const dot =
+    palette === "strong"
+      ? "bg-strong"
+      : palette === "meets"
+        ? "bg-meets"
+        : "bg-dev";
+  return (
+    <span
+      className={`inline-flex items-center gap-2 py-1.5 px-3 rounded-full font-mono text-[10.5px] tracking-[0.14em] uppercase font-medium ${tone}`}
+    >
+      <span className={`w-1.5 h-1.5 rounded-full ${dot}`} />
+      {label ?? LEVEL_LABELS[level]}
+    </span>
+  );
+}
+
+function Button({
+  variant = "default",
+  onClick,
+  children,
+}: {
+  variant?: "default" | "primary" | "ghost";
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  const base =
+    "inline-flex items-center gap-2.5 py-3.5 px-[26px] rounded-full font-inherit text-[13px] tracking-[0.02em] cursor-pointer transition-all duration-[160ms] ease border";
+  const styles =
+    variant === "primary"
+      ? "bg-ink text-bg border-ink hover:bg-[oklch(0.32_0.02_60)]"
+      : variant === "ghost"
+        ? "bg-transparent border-transparent text-ink-dim hover:text-ink"
+        : "bg-transparent border-line text-ink hover:bg-bg-elev hover:border-ink-mute";
+  return (
+    <button type="button" onClick={onClick} className={`${base} ${styles}`}>
+      {children}
+    </button>
+  );
+}
+
+/* ---------------------------- Helpers ---------------------------- */
+
+function pickMimeType(): string {
+  if (typeof window === "undefined") return "";
+  const candidates = [
+    "audio/webm;codecs=opus",
+    "audio/webm",
+    "audio/mp4",
+    "audio/ogg;codecs=opus",
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return "";
+}
+
+function pickExt(mimeType: string): string {
+  if (mimeType.includes("mp4")) return "mp4";
+  if (mimeType.includes("ogg")) return "ogg";
+  return "webm";
+}
+
+async function estimateAudioDuration(file: File): Promise<number> {
+  const url = URL.createObjectURL(file);
+  return new Promise<number>((resolve) => {
+    const audio = new Audio();
+    audio.preload = "metadata";
+    audio.onloadedmetadata = () => {
+      URL.revokeObjectURL(url);
+      resolve(Number.isFinite(audio.duration) ? audio.duration : 60);
+    };
+    audio.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(60);
+    };
+    audio.src = url;
+  });
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function formatTimestamp(date: Date): string {
+  const months = [
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+  ];
+  let hour = date.getHours();
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const ampm = hour >= 12 ? "pm" : "am";
+  hour = hour % 12 || 12;
+  return `${months[date.getMonth()]} ${date.getDate()} · ${hour}:${minute}${ampm}`;
+}
+
+function buildPlaintextReport(result: EvaluationResult): string {
+  const lines: string[] = [];
+  lines.push(`ELEVATOR PITCH EVALUATION`);
+  lines.push("");
+  lines.push(`Verdict: ${result.verdict}`);
+  lines.push(
+    `Overall: ${result.overallScore}/100 · ${LEVEL_LABELS[result.verdictLevel]} · ${result.verdictMet.met} of ${result.verdictMet.total} dimensions meet`,
+  );
+  lines.push("");
+  lines.push(`OVERALL IMPRESSION`);
+  lines.push(result.overallImpression);
+  lines.push("");
+  lines.push(`TRANSCRIPT`);
+  lines.push(result.transcript);
+  lines.push("");
+  lines.push(
+    `TIMING — ${LEVEL_LABELS[result.timing.level]} (${result.timing.badgeLabel})`,
+  );
+  lines.push(result.timing.note);
+  lines.push("");
+  for (const dim of result.dimensions) {
+    lines.push(
+      `${String(dim.index).padStart(2, "0")} · ${dim.title} — ${LEVEL_LABELS[dim.level]} (${dim.subscore}/5, weight ${Math.round(dim.weight * 100)}%)`,
+    );
+    if (dim.evidence) lines.push(`   Evidence: ${dim.evidence}`);
+    lines.push(`   ${dim.coaching}`);
+    lines.push("");
+  }
+  lines.push(
+    `Model: ${result.model} · Tokens in/out: ${result.usage.inputTokens}/${result.usage.outputTokens}`,
+  );
+  return lines.join("\n");
 }

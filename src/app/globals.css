@@ -1,26 +1,114 @@
 @import "tailwindcss";
 
+/* Paper-and-ink palette. All colors in OKLCH for perceptual uniformity. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg: oklch(0.965 0.010 85);
+  --bg-elev: oklch(0.945 0.012 82);
+  --bg-soft: oklch(0.925 0.014 80);
+
+  --ink: oklch(0.22 0.015 60);
+  --ink-dim: oklch(0.42 0.012 60);
+  --ink-mute: oklch(0.56 0.010 60);
+  --ink-faint: oklch(0.70 0.010 60);
+
+  --line: oklch(0.78 0.012 65);
+  --line-soft: oklch(0.87 0.010 70);
+
+  --strong: oklch(0.48 0.11 155);
+  --meets: oklch(0.45 0.11 240);
+  --dev: oklch(0.58 0.14 55);
+
+  --hl-bg: color-mix(in oklch, oklch(0.78 0.13 70) 38%, transparent);
+  --hl-ink: oklch(0.28 0.08 50);
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: var(--bg);
+  --color-bg-elev: var(--bg-elev);
+  --color-bg-soft: var(--bg-soft);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-mute: var(--ink-mute);
+  --color-ink-faint: var(--ink-faint);
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+  --color-strong: var(--strong);
+  --color-meets: var(--meets);
+  --color-dev: var(--dev);
+
+  --font-sans: var(--font-sans);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--font-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+html,
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, -apple-system, sans-serif;
+  font-feature-settings: "ss01", "cv11", "ss03";
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Fade-in on screen change */
+.fade-in {
+  animation: fadein 420ms ease both;
+}
+@keyframes fadein {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
   }
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+@keyframes slowspin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse-soft {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.animate-slowspin {
+  animation: slowspin 40s linear infinite;
+}
+.animate-pulse-soft {
+  animation: pulse-soft 1.2s ease-in-out infinite;
+}
+
+/* Transcript highlights */
+.transcript mark {
+  background: var(--hl-bg);
+  color: var(--hl-ink);
+  padding: 1px 4px;
+  border-radius: 2px;
+  cursor: pointer;
+  border-bottom: 1px solid color-mix(in oklch, var(--dev) 60%, transparent);
+  transition: all 140ms ease;
+}
+.transcript mark:hover,
+.transcript mark.active {
+  background: color-mix(in oklch, var(--dev) 38%, transparent);
+  color: var(--ink);
+}
+.transcript mark .ref {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  vertical-align: 6px;
+  color: var(--dev);
+  margin-left: 2px;
+  font-weight: 500;
 }
