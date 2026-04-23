@@ -16,8 +16,44 @@ import {
 } from "@/lib/highlights";
 import { DEMO_PITCH } from "@/lib/demoPitch";
 
-type Screen = "landing" | "recording" | "processing" | "results";
+type Screen =
+  | "landing"
+  | "recording"
+  | "processing"
+  | "results"
+  | "error";
 type ProcessingStep = 0 | 1 | 2 | 3 | 4; // 4 = all done
+
+// Max recording length. Whisper caps uploads at 25 MB — at typical WebM/Opus
+// bitrates, ~3 minutes is the safe ceiling.
+const RECORDING_HARD_CUTOFF_SECONDS = 180;
+// Floor below which the pitch is too short to coach on meaningfully.
+const MIN_PITCH_SECONDS = 8;
+// Minimum transcript length (chars) we'll even try to evaluate.
+const MIN_TRANSCRIPT_CHARS = 30;
+
+type ErrorKind =
+  | "mic_denied"
+  | "mic_missing"
+  | "mic_generic"
+  | "too_short"
+  | "empty_transcript"
+  | "upload_too_large"
+  | "api_failure";
+
+type ErrorState = {
+  kind: ErrorKind;
+  title: string;
+  message: string;
+  canRetry: boolean;
+  hint?: string;
+};
+
+type RetryContext = {
+  audioBlob: Blob;
+  durationSeconds: number;
+  audioUrl: string;
+} | null;
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("landing");
@@ -26,7 +62,9 @@ export default function Home() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [result, setResult] = useState<EvaluationResult | null>(null);
   const [processingStep, setProcessingStep] = useState<ProcessingStep>(0);
-  const [error, setError] = useState<string | null>(null);
+  const [errorState, setErrorState] = useState<ErrorState | null>(null);
+  const [landingError, setLandingError] = useState<ErrorState | null>(null);
+  const retryRef = useRef<RetryContext>(null);
 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -50,8 +88,10 @@ export default function Home() {
     setAudioUrl(null);
     setElapsedSeconds(0);
     setResult(null);
-    setError(null);
+    setErrorState(null);
+    setLandingError(null);
     setProcessingStep(0);
+    retryRef.current = null;
     procFakeTimersRef.current.forEach(clearTimeout);
     procFakeTimersRef.current = [];
   }
@@ -83,14 +123,15 @@ export default function Home() {
       startedAtRef.current = Date.now();
       setScreen("recording");
       tickerRef.current = setInterval(() => {
-        setElapsedSeconds((Date.now() - startedAtRef.current) / 1000);
+        const elapsed = (Date.now() - startedAtRef.current) / 1000;
+        setElapsedSeconds(elapsed);
+        // Hard cutoff at 3 minutes — Whisper's 25MB upload cap.
+        if (elapsed >= RECORDING_HARD_CUTOFF_SECONDS) {
+          onStopAndEvaluate();
+        }
       }, 80);
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? `Microphone access failed: ${err.message}`
-          : "Microphone access failed.",
-      );
+      setLandingError(classifyMicError(err));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -127,7 +168,7 @@ export default function Home() {
     presetTranscript: string | null;
     durationSeconds: number;
   }) {
-    setError(null);
+    setErrorState(null);
     setResult(null);
     setProcessingStep(0);
     procFakeTimersRef.current.forEach(clearTimeout);
@@ -156,12 +197,47 @@ export default function Home() {
         });
         const transcribeData = await transcribeRes.json();
         if (!transcribeRes.ok) {
-          throw new Error(transcribeData.error ?? "Transcription failed.");
+          if (transcribeRes.status === 413) {
+            throw errorObject({
+              kind: "upload_too_large",
+              title: "Recording too long",
+              message:
+                "Your recording is over the 25 MB upload limit. Try a shorter take — the target window is 60–90 seconds anyway.",
+              canRetry: false,
+            });
+          }
+          throw errorObject({
+            kind: "api_failure",
+            title: "Transcription failed",
+            message:
+              transcribeData.error ??
+              "Whisper didn't return a transcript for this recording.",
+            canRetry: true,
+          });
         }
         transcript = transcribeData.transcript;
         setProcessingStep(1);
       } else {
-        throw new Error("No audio or transcript provided.");
+        throw errorObject({
+          kind: "api_failure",
+          title: "No audio provided",
+          message: "Nothing was sent to transcribe. Try recording again.",
+          canRetry: false,
+        });
+      }
+
+      // Guard against empty / silence-only transcripts before hitting Claude.
+      const trimmed = (transcript ?? "").trim();
+      if (trimmed.length < MIN_TRANSCRIPT_CHARS) {
+        throw errorObject({
+          kind: "empty_transcript",
+          title: "We couldn't make out a pitch",
+          message:
+            trimmed.length === 0
+              ? "Whisper didn't hear anything in that recording. Make sure your mic is close and try again."
+              : `Whisper transcribed only "${trimmed}" — not enough to coach on. Try again with a fuller take.`,
+          canRetry: args.presetTranscript == null,
+        });
       }
 
       // Fire off evaluate; during its wait, step UI advances on fake timers.
@@ -180,7 +256,14 @@ export default function Home() {
       });
       const evaluateData = await evaluateRes.json();
       if (!evaluateRes.ok) {
-        throw new Error(evaluateData.error ?? "Evaluation failed.");
+        throw errorObject({
+          kind: "api_failure",
+          title: "Evaluation failed",
+          message:
+            evaluateData.error ??
+            "Claude didn't return an evaluation for this pitch.",
+          canRetry: true,
+        });
       }
 
       procFakeTimersRef.current.forEach(clearTimeout);
@@ -193,12 +276,13 @@ export default function Home() {
     } catch (err) {
       procFakeTimersRef.current.forEach(clearTimeout);
       procFakeTimersRef.current = [];
-      setError(err instanceof Error ? err.message : String(err));
-      setScreen("landing");
+      setErrorState(toErrorState(err));
+      setScreen("error");
     }
   }
 
   function onStopAndEvaluate() {
+    const elapsed = (Date.now() - startedAtRef.current) / 1000;
     stopRecording();
     // Wait one tick so onstop fires and audioBlob is ready.
     setTimeout(() => {
@@ -208,16 +292,53 @@ export default function Home() {
           })
         : audioBlob;
       if (!blob) {
-        setError("No audio captured.");
+        setLandingError({
+          kind: "too_short",
+          title: "No audio captured",
+          message:
+            "The recording didn't pick up any audio. Check your microphone is active and try again.",
+          canRetry: false,
+        });
         setScreen("landing");
         return;
       }
+      if (elapsed < MIN_PITCH_SECONDS) {
+        setLandingError({
+          kind: "too_short",
+          title: "That was too short",
+          message: `The recording came in at ${elapsed.toFixed(1)}s. Give yourself at least ${MIN_PITCH_SECONDS} seconds to land a pitch — ideally 60–90.`,
+          canRetry: false,
+        });
+        setScreen("landing");
+        return;
+      }
+      // Remember what we captured so the error-screen retry can reuse it.
+      const url = URL.createObjectURL(blob);
+      retryRef.current = {
+        audioBlob: blob,
+        audioUrl: url,
+        durationSeconds: elapsed,
+      };
       runFullPipeline({
         audioBlobForTranscribe: blob,
         presetTranscript: null,
-        durationSeconds: (Date.now() - startedAtRef.current) / 1000,
+        durationSeconds: elapsed,
       });
     }, 100);
+  }
+
+  function retryLastRun() {
+    const ctx = retryRef.current;
+    if (!ctx) {
+      resetAll();
+      setScreen("landing");
+      return;
+    }
+    runFullPipeline({
+      audioBlobForTranscribe: ctx.audioBlob,
+      presetTranscript: null,
+      durationSeconds: ctx.durationSeconds,
+    });
   }
 
   function onDemoPitch() {
@@ -244,7 +365,7 @@ export default function Home() {
 
       {screen === "landing" && (
         <LandingScreen
-          error={error}
+          error={landingError}
           onStart={startRecording}
           onDemo={onDemoPitch}
           onUpload={onUploadAudio}
@@ -272,6 +393,17 @@ export default function Home() {
             setScreen("landing");
           }}
           onRecordAgain={startRecording}
+        />
+      )}
+
+      {screen === "error" && errorState && (
+        <ErrorScreen
+          error={errorState}
+          onRetry={retryLastRun}
+          onBack={() => {
+            resetAll();
+            setScreen("landing");
+          }}
         />
       )}
     </div>
@@ -320,7 +452,7 @@ function LandingScreen({
   onDemo,
   onUpload,
 }: {
-  error: string | null;
+  error: ErrorState | null;
   onStart: () => void;
   onDemo: () => void;
   onUpload: (file: File) => void;
@@ -411,8 +543,18 @@ function LandingScreen({
       </div>
 
       {error && (
-        <div className="mt-10 border border-[color-mix(in_oklch,var(--dev)_40%,transparent)] bg-[color-mix(in_oklch,var(--dev)_6%,transparent)] text-ink px-5 py-4 text-sm rounded">
-          {error}
+        <div className="mt-10 border border-[color-mix(in_oklch,var(--dev)_40%,transparent)] bg-[color-mix(in_oklch,var(--dev)_6%,transparent)] text-ink px-5 py-4 rounded">
+          <div className="font-mono text-[10.5px] tracking-[0.14em] uppercase text-dev mb-1">
+            {error.title}
+          </div>
+          <div className="text-[14px] leading-[1.55] text-ink">
+            {error.message}
+          </div>
+          {error.hint && (
+            <div className="text-[13px] leading-[1.5] text-ink-dim mt-2">
+              {error.hint}
+            </div>
+          )}
         </div>
       )}
 
@@ -1165,6 +1307,47 @@ function Button({
   );
 }
 
+/* ---------------------------- Error screen ---------------------------- */
+
+function ErrorScreen({
+  error,
+  onRetry,
+  onBack,
+}: {
+  error: ErrorState;
+  onRetry: () => void;
+  onBack: () => void;
+}) {
+  return (
+    <main className="fade-in mt-16">
+      <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-dev">
+        Error · {error.kind.replace(/_/g, " ")}
+      </div>
+      <div className="font-serif text-[56px] leading-[1.02] tracking-[-0.015em] max-w-[18ch] mt-6 max-sm:text-[40px]">
+        {error.title}
+      </div>
+      <p className="mt-6 text-[17px] leading-[1.65] text-ink max-w-[60ch] font-light">
+        {error.message}
+      </p>
+      {error.hint && (
+        <p className="mt-3 text-[14px] leading-[1.5] text-ink-dim max-w-[60ch]">
+          {error.hint}
+        </p>
+      )}
+      <div className="flex gap-3 mt-12 flex-wrap">
+        {error.canRetry && (
+          <Button variant="primary" onClick={onRetry}>
+            Try again
+          </Button>
+        )}
+        <Button variant="default" onClick={onBack}>
+          Back to record
+        </Button>
+      </div>
+    </main>
+  );
+}
+
 /* ---------------------------- Helpers ---------------------------- */
 
 function pickMimeType(): string {
@@ -1206,6 +1389,82 @@ async function estimateAudioDuration(file: File): Promise<number> {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
+}
+
+/**
+ * Turn a getUserMedia rejection into a typed ErrorState with a useful message.
+ * Recognized DOMException `name` values:
+ *   NotAllowedError — user (or browser) denied mic permission
+ *   NotFoundError / DevicesNotFoundError — no mic hardware
+ *   NotReadableError — mic is in use by another app
+ *   SecurityError — insecure context
+ */
+function classifyMicError(err: unknown): ErrorState {
+  const name =
+    err instanceof Error && "name" in err
+      ? (err as Error & { name: string }).name
+      : "";
+  if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+    return {
+      kind: "mic_denied",
+      title: "Microphone access was blocked",
+      message:
+        "Your browser blocked microphone access for this site. You'll need to re-enable it in the site settings, then try again.",
+      hint: "In Chrome: click the lock icon in the address bar → Site settings → Microphone → Allow.",
+      canRetry: false,
+    };
+  }
+  if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+    return {
+      kind: "mic_missing",
+      title: "No microphone detected",
+      message:
+        "Your browser couldn't find a mic. Plug one in, or try a different device, then reload and try again.",
+      canRetry: false,
+    };
+  }
+  if (name === "NotReadableError") {
+    return {
+      kind: "mic_generic",
+      title: "Your mic is busy",
+      message:
+        "Another app may be using the microphone. Close it and try again.",
+      canRetry: false,
+    };
+  }
+  const fallback = err instanceof Error ? err.message : String(err);
+  return {
+    kind: "mic_generic",
+    title: "Microphone access failed",
+    message: fallback,
+    canRetry: false,
+  };
+}
+
+// Marker so thrown ErrorState objects can be unwrapped later.
+const ERROR_STATE_MARKER = "__epe_error_state__";
+
+function errorObject(state: ErrorState): Error {
+  const e = new Error(state.title);
+  (e as unknown as Record<string, unknown>)[ERROR_STATE_MARKER] = state;
+  return e;
+}
+
+function toErrorState(err: unknown): ErrorState {
+  if (
+    err instanceof Error &&
+    (err as unknown as Record<string, unknown>)[ERROR_STATE_MARKER]
+  ) {
+    return (err as unknown as Record<string, unknown>)[
+      ERROR_STATE_MARKER
+    ] as ErrorState;
+  }
+  return {
+    kind: "api_failure",
+    title: "Something went wrong",
+    message: err instanceof Error ? err.message : String(err),
+    canRetry: true,
+  };
 }
 
 function formatTimestamp(date: Date): string {
