@@ -40,17 +40,8 @@ export async function POST(request: Request) {
     const result = await evaluatePitch(parsed.data);
     // Fire-and-forget: email the admin. The helper swallows errors so an
     // email failure never breaks the user's evaluation response.
-    const notify = await sendSubmissionEmail(result);
-    // TEMP diagnostic: expose env-var presence flags + notify outcome so we
-    // can verify delivery from the client.
-    const debug = {
-      resendKeyPresent: Boolean(process.env.RESEND_API_KEY),
-      resendKeyLength: process.env.RESEND_API_KEY?.length ?? 0,
-      adminEmailPresent: Boolean(process.env.ADMIN_EMAIL),
-      adminEmailDomain: process.env.ADMIN_EMAIL?.split("@")[1] ?? null,
-      notify,
-    };
-    return Response.json({ ...result, __debug: debug });
+    await sendSubmissionEmail(result);
+    return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error("evaluatePitch failed:", error);
