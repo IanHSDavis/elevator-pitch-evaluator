@@ -18,6 +18,13 @@ export async function POST(request: Request) {
     );
   }
 
+  // Calibration-study escape hatch: suppresses the admin notification.
+  // Used by our curl-based 20-sample studies so they don't burn the
+  // Resend daily quota. No auth on this — the feature's downside is
+  // that a visitor can opt out of admin notification, which is fine.
+  const url = new URL(request.url);
+  const skipNotify = url.searchParams.get("skip_notify") === "1";
+
   let body: unknown;
   try {
     body = await request.json();
@@ -38,9 +45,11 @@ export async function POST(request: Request) {
 
   try {
     const result = await evaluatePitch(parsed.data);
-    // Fire-and-forget: email the admin. The helper swallows errors so an
-    // email failure never breaks the user's evaluation response.
-    await sendSubmissionEmail(result);
+    if (!skipNotify) {
+      // Fire-and-forget: email the admin. The helper swallows errors so an
+      // email failure never breaks the user's evaluation response.
+      await sendSubmissionEmail(result);
+    }
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);

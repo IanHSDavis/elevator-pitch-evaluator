@@ -6,6 +6,18 @@ Entries are newest-first. Each ships-log entry is dated; each friction-smoothed 
 
 ---
 
+## The quality bar
+
+Before I sent the Highspot-based pitch-practice instance live to the field at AWS, I ran it past senior trainers and leaders to validate the feedback. One L7 senior trainer, after running a pitch through the system, said:
+
+> *"This is the depth of feedback I would expect from a sales manager with 15–20 years of experience."*
+
+That quote is the quality bar for this project. Equal or beat it. Not "AI-generated coaching that reads plausible." Not "what a junior manager might say." The target is the read you'd get from a seasoned sales leader who has coached a thousand pitches.
+
+Everything downstream — the "no cheerleading" copy, the evidence-and-highlight mechanic, the rule against generic advice in the system prompt, the deliberate choice to keep coaching text free while constraining only the score — traces back to this benchmark. If a change makes the coaching read more like plausible LLM output and less like a 15-year manager's readout, it's a regression even if the numbers look good.
+
+---
+
 ## Ships log
 
 ### 2026-04-23 — Demo selector + calibration generalization study
