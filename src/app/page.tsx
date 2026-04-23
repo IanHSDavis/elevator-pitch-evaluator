@@ -15,12 +15,19 @@ import {
   toSuperscript,
 } from "@/lib/highlights";
 import { DEMO_PITCH } from "@/lib/demoPitch";
+import {
+  clearHistory,
+  loadHistory,
+  saveToHistory,
+  type HistoryEntry,
+} from "@/lib/history";
 
 type Screen =
   | "landing"
   | "recording"
   | "processing"
   | "results"
+  | "history"
   | "error";
 type ProcessingStep = 0 | 1 | 2 | 3 | 4; // 4 = all done
 
@@ -271,7 +278,9 @@ export default function Home() {
       setProcessingStep(4);
       await sleep(350);
 
-      setResult(evaluateData as EvaluationResult);
+      const resolved = evaluateData as EvaluationResult;
+      setResult(resolved);
+      saveToHistory(resolved);
       setScreen("results");
     } catch (err) {
       procFakeTimersRef.current.forEach(clearTimeout);
@@ -361,7 +370,12 @@ export default function Home() {
 
   return (
     <div className="mx-auto max-w-[960px] px-9 pt-10 pb-32 sm:px-9 max-sm:px-5 max-sm:pt-7 max-sm:pb-24">
-      <Topbar />
+      <Topbar
+        onHistory={() => {
+          resetAll();
+          setScreen("history");
+        }}
+      />
 
       {screen === "landing" && (
         <LandingScreen
@@ -406,13 +420,26 @@ export default function Home() {
           }}
         />
       )}
+
+      {screen === "history" && (
+        <HistoryScreen
+          onOpenEntry={(entry) => {
+            setResult(entry.result);
+            setScreen("results");
+          }}
+          onBack={() => {
+            resetAll();
+            setScreen("landing");
+          }}
+        />
+      )}
     </div>
   );
 }
 
 /* ------------------------------ Topbar ------------------------------ */
 
-function Topbar() {
+function Topbar({ onHistory }: { onHistory: () => void }) {
   return (
     <div className="flex items-center justify-between pb-7 mb-12 border-b border-line-soft">
       <div className="flex items-center gap-3 font-mono text-[11px] tracking-[0.14em] uppercase text-ink-dim">
@@ -420,6 +447,13 @@ function Topbar() {
         <span>Elevator / Pitch / Evaluator</span>
       </div>
       <div className="hidden sm:flex gap-6 font-mono text-[11px] tracking-[0.14em] uppercase text-ink-mute">
+        <button
+          type="button"
+          onClick={onHistory}
+          className="bg-transparent border-0 p-0 font-inherit tracking-inherit uppercase text-inherit cursor-pointer hover:text-ink"
+        >
+          History
+        </button>
         <a href="#rubric" className="hover:text-ink">
           Rubric
         </a>
@@ -1304,6 +1338,237 @@ function Button({
     <button type="button" onClick={onClick} className={`${base} ${styles}`}>
       {children}
     </button>
+  );
+}
+
+/* ---------------------------- History screen ---------------------------- */
+
+function HistoryScreen({
+  onOpenEntry,
+  onBack,
+}: {
+  onOpenEntry: (entry: HistoryEntry) => void;
+  onBack: () => void;
+}) {
+  const [entries, setEntries] = useState<HistoryEntry[]>([]);
+  const [hydrated, setHydrated] = useState(false);
+  const [confirmClear, setConfirmClear] = useState(false);
+
+  useEffect(() => {
+    setEntries(loadHistory());
+    setHydrated(true);
+  }, []);
+
+  function onClear() {
+    if (!confirmClear) {
+      setConfirmClear(true);
+      setTimeout(() => setConfirmClear(false), 2400);
+      return;
+    }
+    clearHistory();
+    setEntries([]);
+    setConfirmClear(false);
+  }
+
+  if (!hydrated) {
+    // Avoid SSR/CSR mismatch: render nothing until we have localStorage data.
+    return <main className="fade-in mt-16" aria-hidden />;
+  }
+
+  if (entries.length === 0) {
+    return (
+      <main className="fade-in mt-16">
+        <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+          History · Practice Ledger
+        </div>
+        <h2 className="font-serif text-[64px] leading-[1.02] tracking-[-0.018em] mt-6 max-w-[16ch] max-sm:text-[44px]">
+          Nothing saved yet.
+        </h2>
+        <p className="mt-6 max-w-[52ch] text-[18px] leading-[1.55] font-light text-ink-dim">
+          Record a pitch and it&apos;ll land here automatically. Your takes
+          never leave this browser — history lives in local storage, not on a
+          server.
+        </p>
+        <div className="mt-10">
+          <Button variant="primary" onClick={onBack}>
+            Record your first pitch
+          </Button>
+        </div>
+      </main>
+    );
+  }
+
+  // Sparkline series: oldest → newest so the eye reads time left→right.
+  const chron = [...entries].reverse();
+  const scores = chron.map((e) => e.result.overallScore);
+  const avg = Math.round(
+    scores.reduce((a, b) => a + b, 0) / scores.length,
+  );
+  const latest = scores[scores.length - 1];
+
+  return (
+    <main className="fade-in">
+      <div className="flex justify-between items-center gap-4 pb-7 border-b border-line-soft">
+        <button
+          type="button"
+          onClick={onBack}
+          className="group font-mono text-[11px] tracking-[0.14em] uppercase text-ink-dim bg-transparent border-0 p-0 cursor-pointer inline-flex items-center gap-2 hover:text-ink"
+        >
+          <span className="inline-block transition-transform duration-200 group-hover:-translate-x-[3px]">
+            ←
+          </span>{" "}
+          Back to record
+        </button>
+        <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint uppercase">
+          {entries.length} {entries.length === 1 ? "take" : "takes"} · avg{" "}
+          {avg}/100 · latest {latest}/100
+        </div>
+      </div>
+
+      <div className="pt-[72px] pb-12 border-b border-line-soft">
+        <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+          History · Practice Ledger
+        </div>
+        <h2 className="font-serif text-[64px] leading-[1.02] tracking-[-0.018em] mt-6 max-w-[18ch] max-sm:text-[44px]">
+          Your last{" "}
+          <em className="text-ink-dim">
+            {entries.length === 1 ? "take" : `${entries.length} takes`}.
+          </em>
+        </h2>
+        <div className="mt-10">
+          <Sparkline scores={scores} />
+        </div>
+      </div>
+
+      <section>
+        <div className="flex justify-between items-baseline pt-9 pb-4.5 border-b border-line-soft">
+          <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+            Sessions
+          </div>
+          <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+            Newest first
+          </div>
+        </div>
+
+        <div>
+          {entries.map((entry) => (
+            <HistoryRow
+              key={entry.id}
+              entry={entry}
+              onOpen={() => onOpenEntry(entry)}
+            />
+          ))}
+        </div>
+      </section>
+
+      <div className="mt-16 pt-8 border-t border-line-soft flex justify-between items-center flex-wrap gap-4">
+        <div className="font-mono text-[10.5px] tracking-[0.12em] text-ink-faint uppercase">
+          Stored locally · never sent to any server
+        </div>
+        <Button
+          variant={confirmClear ? "primary" : "ghost"}
+          onClick={onClear}
+        >
+          {confirmClear ? "Confirm clear" : "Clear history"}
+        </Button>
+      </div>
+    </main>
+  );
+}
+
+function HistoryRow({
+  entry,
+  onOpen,
+}: {
+  entry: HistoryEntry;
+  onOpen: () => void;
+}) {
+  const date = new Date(entry.savedAt);
+  const dateLabel = formatTimestamp(date);
+  const { result } = entry;
+
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      className="group w-full text-left bg-transparent border-0 p-0 cursor-pointer border-b border-line-soft"
+    >
+      <div className="grid grid-cols-[110px_1fr_auto_auto] gap-6 py-6 items-center max-sm:grid-cols-[1fr_auto] max-sm:grid-rows-[auto_auto] max-sm:gap-x-4 max-sm:gap-y-2">
+        <div className="font-mono text-[11px] tracking-[0.12em] uppercase text-ink-faint group-hover:text-ink-dim max-sm:row-start-1 max-sm:col-start-1">
+          {dateLabel}
+        </div>
+        <div className="text-[17px] leading-[1.35] text-ink font-light group-hover:text-ink max-sm:row-start-2 max-sm:col-span-2">
+          {result.verdict}
+        </div>
+        <div className="max-sm:row-start-1 max-sm:col-start-2 max-sm:justify-self-end">
+          <Badge level={result.verdictLevel} />
+        </div>
+        <div className="font-serif text-[28px] leading-none tabular-nums text-ink max-sm:row-start-1 max-sm:col-start-2 max-sm:hidden">
+          {result.overallScore}
+          <span className="text-[13px] text-ink-mute">/100</span>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function Sparkline({ scores }: { scores: number[] }) {
+  if (scores.length === 0) return null;
+
+  const width = 800;
+  const height = 64;
+  const barGap = 3;
+  const totalBars = scores.length;
+  const barWidth = Math.max(
+    2,
+    (width - barGap * (totalBars - 1)) / totalBars,
+  );
+
+  function bandClass(score: number): string {
+    if (score >= 75) return "fill-strong";
+    if (score >= 55) return "fill-meets";
+    return "fill-dev";
+  }
+
+  return (
+    <div className="w-full">
+      <svg
+        width="100%"
+        height={height}
+        viewBox={`0 0 ${width} ${height}`}
+        preserveAspectRatio="none"
+        role="img"
+        aria-label={`Score trend across ${scores.length} sessions`}
+      >
+        <line
+          x1={0}
+          x2={width}
+          y1={height - 0.5}
+          y2={height - 0.5}
+          stroke="var(--line-soft)"
+          strokeWidth={1}
+        />
+        {scores.map((score, i) => {
+          const h = Math.max(2, (score / 100) * (height - 4));
+          const x = i * (barWidth + barGap);
+          return (
+            <rect
+              key={i}
+              x={x}
+              y={height - h}
+              width={barWidth}
+              height={h}
+              rx={1}
+              className={bandClass(score)}
+            />
+          );
+        })}
+      </svg>
+      <div className="flex justify-between pt-2 font-mono text-[10px] tracking-[0.14em] uppercase text-ink-faint">
+        <span>Older</span>
+        <span>Newer</span>
+      </div>
+    </div>
   );
 }
 
