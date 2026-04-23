@@ -61,7 +61,6 @@ export default async function Image() {
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 14,
             fontFamily: "JetBrains Mono",
             fontSize: 18,
             letterSpacing: "0.14em",
@@ -69,27 +68,6 @@ export default async function Image() {
             color: INK_DIM,
           }}
         >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 20,
-              height: 20,
-              borderRadius: 2,
-              background: INK,
-            }}
-          >
-            <div
-              style={{
-                display: "flex",
-                width: 6,
-                height: 12,
-                borderRadius: 1,
-                background: BG,
-              }}
-            />
-          </div>
           <span>Elevator / Pitch / Evaluator</span>
         </div>
 
