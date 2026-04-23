@@ -3,16 +3,8 @@ import { PERFORMANCE_LEVELS } from "./rubric";
 
 const DimensionEvaluation = z.object({
   level: z.enum(PERFORMANCE_LEVELS).describe(
-    "Performance level for this dimension. Coaching-oriented, not pass/fail.",
+    "Performance level for this dimension. Coaching-oriented, not pass/fail. The numeric subscore is derived from this level deterministically in code — you do not return it.",
   ),
-  subscore: z
-    .number()
-    .int()
-    .min(1)
-    .max(5)
-    .describe(
-      "Integer score 1-5 within this level. Exceeds → 4-5, Meets → 3-4, Developing → 1-2. Use the full range honestly.",
-    ),
   evidence: z
     .string()
     .describe(

@@ -4,12 +4,11 @@ import {
   countMetDimensions,
   DIMENSIONS,
   LEVEL_LABELS,
-  LEVEL_SUBSCORE_RANGE,
   overallScore,
   PERFORMANCE_LEVELS,
   scoreTiming,
+  subscoreForLevel,
   TIMING,
-  timingSubscore,
   verdictLevel,
   type DimensionKey,
   type PerformanceLevel,
@@ -21,10 +20,9 @@ const MODEL = "claude-opus-4-7";
 
 function buildSystemPrompt(): string {
   const dimensionText = DIMENSIONS.map((dim) => {
-    const levels = PERFORMANCE_LEVELS.map((level) => {
-      const range = LEVEL_SUBSCORE_RANGE[level];
-      return `- **${LEVEL_LABELS[level]}** (subscore ${range.min}–${range.max}): ${dim.descriptors[level]}`;
-    }).join("\n");
+    const levels = PERFORMANCE_LEVELS.map(
+      (level) => `- **${LEVEL_LABELS[level]}**: ${dim.descriptors[level]}`,
+    ).join("\n");
     return `### ${dim.title} (\`${dim.key}\`)\n${dim.summary}\n\n${levels}`;
   }).join("\n\n");
 
@@ -34,19 +32,48 @@ You are warm but direct. You pay close attention to what the speaker actually sa
 
 ## The rubric
 
-You evaluate four dimensions. Each has three performance levels: \`exceeds\` (strongest), \`meets\` (present and functional), \`developing\` (the growth area). Specificity and clarity are baked into each level's descriptor. Within a level, you also pick an integer subscore on a 1–5 scale, using the ranges below.
+You evaluate four dimensions. Each has three performance levels: \`exceeds\` (strongest), \`meets\` (present and functional), \`developing\` (the growth area). Specificity and clarity are baked into each level's descriptor.
 
 ${dimensionText}
 
 Timing is scored separately from the actual audio duration and is not part of your job. Do not mention pitch length, pacing, or audio duration in your feedback.
 
+## Calibration — how to pick a level consistently
+
+For every dimension, start by asking whether the pitch clearly does what the \`meets\` descriptor says. If it doesn't, the level is \`developing\`. If it clearly does, then ask whether it also clears the \`exceeds\` bar. The following boundary rules anchor the meets/exceeds judgment for the two dimensions where the distinction is most slippery. Apply them literally.
+
+### Opening & Credibility Frame — meets vs exceeds
+
+A pitch that states name, role, and company clearly but in generic language is **meets**. Example of meets-tier: "I'm Jordan, and I run a SaaS company called TrackTide." Identity is clear; nothing about the framing would stick in a listener's memory 60 seconds later.
+
+For **exceeds**, the opening must include a *specific, memorable descriptor* that does one of these three things:
+- Defines the category in distinctive terms (e.g., "the churn-intelligence layer for B2B SaaS," "a compliance wedge for mid-market fintechs").
+- Names a role definition that creates a mental picture (e.g., "I coach revenue leaders on their first 90 days").
+- Opens with a sharp framing device — a provocation, a statistic, a contrast — that earns the next sentence.
+
+Default to **meets** unless the memorable-descriptor test is clearly satisfied. A "small SaaS company" generic framing, no matter how clearly stated, is meets.
+
+### Customer Problem Identification — meets vs exceeds
+
+A pitch that names a problem in abstract or general terms is **meets**. Examples of meets-tier: "Most companies struggle to understand their customer churn." / "Teams can't figure out why users leave." The problem is present and recognizable, but stated at a level of abstraction that any buyer could nod along to without feeling personally addressed.
+
+For **exceeds**, the problem must be anchored to at least one of:
+- A specific role or persona (e.g., "Customer Success leaders," "VPs of Product").
+- A concrete moment or scene (e.g., "staring at a Monday morning dashboard," "mid-QBR when the CEO asks why").
+- A quantifiable frustration (e.g., "spending eight hours a week reconciling spreadsheets").
+
+Default to **meets** unless a reader whose job literally involves that pain would think "that's me." Vague empathy is meets; named empathy is exceeds.
+
+### Value Proposition and Call to Action
+
+These boundaries tend to be less ambiguous — apply the descriptors directly. For Value Proposition, the solution must be tied to the problem (a generic product blurb that doesn't reference the stated problem is developing, not meets). For Call to Action, the test is whether the listener has a concrete, low-friction next move; "learn more" or restating the product is not a call to action.
+
 ## What to return per dimension
 
-1. **level** — \`exceeds\`, \`meets\`, or \`developing\`. Pick the one whose descriptor best matches what you heard. When genuinely torn between two levels, default to the lower one.
-2. **subscore** — integer 1–5 within the level's range. Use the full range honestly — a borderline Meets is a 3; a strong Meets is a 4.
-3. **evidence** — a short quote or close paraphrase that supports the level. Must refer to something actually said. If a dimension is entirely absent, say so plainly (e.g., "No explicit next step is offered.").
-4. **highlight** — the exact phrase from the transcript to highlight in-line. Copy it verbatim — the client matches it against the transcript and wraps it with a <mark> tag to create a clickable cross-reference to your coaching. Pick the single most emblematic phrase for this dimension. If there's no good single phrase (e.g., the dimension is completely absent), return an empty string.
-5. **coaching** — two to four sentences. Specific. Tied to the speaker's actual language. Suggest a concrete next move. Never use phrases like "consider adding specificity" without showing what that looks like.
+1. **level** — \`exceeds\`, \`meets\`, or \`developing\`. Apply the calibration rules above; when torn, default to the lower level. You do **not** return a numeric subscore — the client derives it from the level.
+2. **evidence** — a short quote or close paraphrase that supports the level. Must refer to something actually said. If a dimension is entirely absent, say so plainly (e.g., "No explicit next step is offered.").
+3. **highlight** — the exact phrase from the transcript to highlight in-line. Copy it verbatim — the client matches it against the transcript and wraps it with a <mark> tag to create a clickable cross-reference to your coaching. Pick the single most emblematic phrase for this dimension. If there's no good single phrase (e.g., the dimension is completely absent), return an empty string.
+4. **coaching** — two to four sentences. Specific. Tied to the speaker's actual language. Suggest a concrete next move. Never use phrases like "consider adding specificity" without showing what that looks like.
 
 ## And overall
 
@@ -144,7 +171,7 @@ ${input.transcript.trim()}
       title: dim.title,
       shortLabel: dim.shortLabel,
       level: entry.level,
-      subscore: entry.subscore,
+      subscore: subscoreForLevel(entry.level),
       weight: dim.weight,
       evidence: entry.evidence,
       highlight: entry.highlight,
@@ -157,24 +184,19 @@ ${input.transcript.trim()}
     ...timingBase,
     title: TIMING.title,
     weight: TIMING.weight,
-    subscore: timingSubscore(timingBase.level),
+    subscore: subscoreForLevel(timingBase.level),
   };
 
-  const dimensionSubscores = Object.fromEntries(
-    dimensions.map((d) => [d.key, d.subscore]),
-  ) as Record<DimensionKey, number>;
+  const dimensionLevels = Object.fromEntries(
+    dimensions.map((d) => [d.key, d.level]),
+  ) as Record<DimensionKey, PerformanceLevel>;
 
   const overall = overallScore({
-    dimensionSubscores,
+    dimensionLevels,
     timingLevel: timing.level,
   });
 
-  const metCounts = countMetDimensions(
-    Object.fromEntries(
-      dimensions.map((d) => [d.key, d.level]),
-    ) as Record<DimensionKey, PerformanceLevel>,
-    timing.level,
-  );
+  const metCounts = countMetDimensions(dimensionLevels, timing.level);
 
   return {
     verdict: parsed.verdict,

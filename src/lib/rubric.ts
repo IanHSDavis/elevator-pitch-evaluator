@@ -171,31 +171,37 @@ export function scoreTiming(durationSeconds: number): TimingResult {
   };
 }
 
-// Subscore defaults by level (0–5 scale). Claude returns a precise subscore
-// within the level's range for more gradient; these are fallbacks.
-export const LEVEL_SUBSCORE_RANGE: Record<PerformanceLevel, { min: number; max: number }> = {
-  exceeds: { min: 4, max: 5 },
-  meets: { min: 3, max: 4 },
-  developing: { min: 1, max: 2 },
+// Subscore is derived deterministically from level. Claude returns level only
+// — it doesn't pick a 1–5 subscore. This was an explicit calibration move:
+// letting the model pick a subscore inside a level added run-to-run variance
+// without adding useful signal, because the level already captures the
+// scoring band and the coaching text captures the nuance.
+export const LEVEL_TO_SUBSCORE: Record<PerformanceLevel, number> = {
+  exceeds: 5,
+  meets: 3,
+  developing: 1,
 };
 
-export function timingSubscore(level: PerformanceLevel): number {
-  // Timing is level-only (no Claude subscore) — map deterministically.
-  return level === "exceeds" ? 5 : level === "meets" ? 3 : 1;
+export function subscoreForLevel(level: PerformanceLevel): number {
+  return LEVEL_TO_SUBSCORE[level];
 }
 
+// Alias kept for clarity at call sites that specifically compute the timing
+// subscore. Timing has always been level-only, unchanged here.
+export const timingSubscore = subscoreForLevel;
+
 // Overall /100 = Σ (subscore / 5) × weight × 100.
-// Claude returns per-dimension subscores 1–5; timing uses timingSubscore().
+// Subscores are derived from per-dimension levels via subscoreForLevel.
 export function overallScore(args: {
-  dimensionSubscores: Record<DimensionKey, number>;
+  dimensionLevels: Record<DimensionKey, PerformanceLevel>;
   timingLevel: PerformanceLevel;
 }): number {
   let total = 0;
   for (const dim of DIMENSIONS) {
-    const sub = args.dimensionSubscores[dim.key];
-    total += (sub / 5) * dim.weight;
+    const level = args.dimensionLevels[dim.key];
+    total += (subscoreForLevel(level) / 5) * dim.weight;
   }
-  total += (timingSubscore(args.timingLevel) / 5) * TIMING.weight;
+  total += (subscoreForLevel(args.timingLevel) / 5) * TIMING.weight;
   return Math.round(total * 100);
 }
 
