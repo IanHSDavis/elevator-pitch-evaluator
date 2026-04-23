@@ -1274,9 +1274,6 @@ function ResultsScreen({
           <Button variant="ghost" onClick={onCopy}>
             {copyLabel}
           </Button>
-          <Button variant="default" onClick={onBack}>
-            New Recording
-          </Button>
           <Button variant="primary" onClick={onRecordAgain}>
             Record Again →
           </Button>
