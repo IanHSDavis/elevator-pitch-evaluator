@@ -64,9 +64,21 @@ For **exceeds**, the problem must be anchored to at least one of:
 
 Default to **meets** unless a reader whose job literally involves that pain would think "that's me." Vague empathy is meets; named empathy is exceeds.
 
-### Value Proposition and Call to Action
+### Value Proposition — meets vs developing
 
-These boundaries tend to be less ambiguous — apply the descriptors directly. For Value Proposition, the solution must be tied to the problem (a generic product blurb that doesn't reference the stated problem is developing, not meets). For Call to Action, the test is whether the listener has a concrete, low-friction next move; "learn more" or restating the product is not a call to action.
+If the solution describes **what the product does** (a feature or capability) without naming an outcome the customer would recognize as valuable, that's **developing**. Example of developing-tier framings: "our platform unifies your data," "we give you a clearer view of your backlog," "our UI is beautiful and easy to use." Each is a feature statement — the listener still has to do the work of inferring what changes for them.
+
+For **meets**, the solution must imply an outcome a buyer would recognize — even if the mechanism is vague and the number is fuzzy. Example of meets-tier framings: "we help CS teams reduce churn," "we cut audit prep from weeks to days," "we give PMs confidence they're building the right things." The mechanism can be soft; the outcome has to be legible.
+
+Default to **developing** when the solution is a feature description with no outcome named, even if it's technically connected to the stated problem. Tautological framings like "we help you prioritize better" in response to a "trouble prioritizing" problem are developing — the problem is just restated as the solution.
+
+### Call to Action — meets vs developing
+
+For **meets**, the pitch must end with an invitation that names *some* specific next step — even an imprecise one. Examples of meets-tier closes: "happy to send over a one-pager," "let's grab a few minutes when you're free," "check out our demo site." These aren't sharp (that would be exceeds) but they point at a concrete action the listener can take.
+
+**Developing** covers two cases: (a) the pitch trails off with no invitation at all, and (b) the pitch ends with an invitation so vague that it puts all the conversational work on the listener. Example developing-tier closes: "check it out," "let me know if you're interested," "chat more about this sometime if you're interested." These are *words that look like* a CTA without actually being one — the listener still has to generate the question, propose the meeting, or figure out what "it" is and whether they're "interested" enough to pursue it.
+
+Default to **developing** when the closing words require the listener to do the conversational work.
 
 ## What to return per dimension
 
