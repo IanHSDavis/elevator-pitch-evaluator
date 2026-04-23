@@ -8,6 +8,20 @@ Entries are newest-first. Each ships-log entry is dated; each friction-smoothed 
 
 ## Ships log
 
+### 2026-04-23 — Demo selector + calibration generalization study
+
+Added two new demo pitches alongside the existing TrackTide: a deliberately-weak one (no identity, no problem, feature dump, vague close, 28s) and a deliberately-strong one (specific role, anchored problem, mechanism + outcome with proof, optioned CTA, 62s). Landing page now shows a small "Or try a demo: weak · mid · strong" selector.
+
+Then ran the 20-sample baseline on each new pitch (40 additional calls) to verify the calibration shipped earlier today generalizes beyond TrackTide. Results:
+
+- **Weak pitch: 20/100 every time.** All 4 dimensions + timing = developing. Verdict: "A product demo in search of a problem, an audience, and an ask."
+- **Mid pitch (TrackTide): 82/100 every time.** (Unchanged from earlier study.)
+- **Strong pitch: 100/100 every time.** All 4 dimensions + timing = exceeds. Verdict: "A tight, specific pitch that earns every beat from hook to ask."
+
+Stdev 0.0 on all three. The rubric genuinely spans 0–100 and the calibration holds across the full quality range. The "default to meets unless X" guidance isn't overfit to TrackTide-specific wording — it's operating on structural pitch characteristics (role anchoring, mechanism + outcome, specific CTA).
+
+Commit: [`3b97df7`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/3b97df7).
+
 ### 2026-04-23 — Scoring calibration
 
 Demo pitch ran 20 times showed overall scores in the 77–87 range on *identical input*. Stdev 3.6, 10-point spread. Embarrassing for a tool whose whole purpose is calibration.
@@ -91,6 +105,14 @@ These are the specific "I hit this wall commercially; here's the fix" moments. E
 
 ## What I've learned
 
+### Structural calibration generalizes; surface-level calibration doesn't
+
+When I wrote the boundary guidance into the prompt, I was worried I'd overfit to TrackTide-specific wording ("I run a small SaaS company called TrackTide" → meets). Would the rule hold up against a pitch that said "I lead a seed-stage startup doing AI governance" or any other structurally-similar-but-lexically-different framing?
+
+It does. The 3-pitch generalization study showed 0.0 stdev on weak (20/100), mid (82/100), and strong (100/100) — three structurally very different pitches. What the boundary guidance actually does isn't pattern-match surface vocabulary; it tells Claude *what structural signals* elevate a dimension from meets to exceeds (distinctive category frame, anchored persona, quantified frustration, mechanism + outcome, optioned CTA). Those signals cut across wording.
+
+Generalizable lesson for rubric/prompt design: anchor your calibration language to structural signals, not to example-specific phrasing. Every concrete example in a prompt risks being overfit; the rule above the examples is what needs to be portable.
+
 ### The interesting variance lives in the subscore, not the level
 
 Before the 20-sample baseline study I assumed Claude was disagreeing with itself about whether this pitch was Exceeds-tier or Meets-tier overall. Turns out it never did. The verdict level was "exceeds" in 100% of runs. The 10-point score spread lived entirely in the intra-level subscore drift and in two specific borderline dimensions. **Claude had a consistent read of the pitch; it just expressed that read with noisy numbers.**
@@ -123,6 +145,7 @@ Lesson: silent-skip should *log* when it skips, even if it doesn't raise. A sing
 
 ## Open questions / next
 
-- **Does the calibration generalize?** The boundary guidance cites TrackTide-specific framing as meets-tier. Untested on other pitch styles — next calibration pass needs 2–3 different demo pitches. If the rules don't generalize, the language needs to be more structural ("generic identity framing" rather than "small SaaS company").
+- ~~**Does the calibration generalize?**~~ **Closed 2026-04-23.** Tested against weak (20/100), mid (82/100), and strong (100/100) pitches. Stdev 0 on all three. The structural framing holds across pitch style.
 - **Is zero variance actually desirable?** For a scoring tool yes. For a coaching tool, maybe some variance in numerical call is fine if the coaching is consistent. The prose *is* varying run-to-run; only the score is frozen. Worth revisiting once a wider pitch corpus is in.
+- **Boundary probing** — next calibration pass worth running: pitches that sit *intentionally* on rubric boundaries (e.g., a pitch with a specific role but no quantified frustration; a pitch with mechanism but no proof point). These three-pitch categories are easy cases at the extremes. The harder, more informative test is deliberately-borderline pitches.
 - **Video coaching phase.** The next major feature — capture video, extract keyframes, score presence/eye-contact/delivery via Claude multimodal. Planned but not shipped. Mitigations (640×480 keyframes, 4 frames not 8, cached visual rubric) baked into the plan from day 1.
