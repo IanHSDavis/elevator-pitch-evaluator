@@ -20,6 +20,27 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-23 — Calibration complete: boundary guidance closes the gap
+
+Wrote meets/developing boundary guidance for Value Proposition and Call to Action — the same structural shape as the meets/exceeds guidance I had for Opening and Customer Problem. The rules:
+
+- **Value Proposition**: feature-only framings ("clearer view," "unified platform," "beautiful UI") are developing. Meets requires the solution to imply a legible outcome even if the mechanism is vague. Tautological framings ("we help you prioritize better" in response to a prioritization problem) are developing — the problem is just restated as solution.
+- **Call to Action**: fake-CTAs ("check it out," "let me know if you're interested," "chat more about this sometime") are developing. The rule: if the closing words make the listener do the conversational work, it's developing regardless of whether there are CTA-shaped words.
+
+Re-ran the borderline study (n=20, with `?skip_notify=1` so no email cost):
+
+| Dimension | Before | After |
+|---|---|---|
+| Opening & Credibility | meets 16/16 | meets 20/20 |
+| Customer Problem | meets 16/16 | meets 20/20 |
+| Value Proposition | **developing 10 / meets 6 (drifts)** | **developing 20/20** |
+| Call to Action | **developing 15 / meets 1 (drifts)** | **developing 20/20** |
+| **Overall score** | **mean 50.25, stdev 5.0** | **46/100 every run, stdev 0** |
+
+**Calibration is complete across all four coached dimensions.** Every boundary probed — meets/exceeds on Opening and Customer Problem, meets/developing on Value Prop and CTA — holds deterministically on the pitches tested. Weak partial (12/20 runs before API credits ran out, see below): zero regression.
+
+Commit: [`9578bae`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/9578bae).
+
 ### 2026-04-23 — Boundary-probe study: found where the calibration ends
 
 Wrote a deliberately-borderline pitch — generic category frame, role-named-but-not-quantified problem, mechanism-vague Value Prop, soft CTA — and ran a 16-sample study (stopped early; Resend's 100/day free-tier quota was approaching its cap). Results were more interesting than if the calibration had held flat:
@@ -142,6 +163,14 @@ These are the specific "I hit this wall commercially; here's the fix" moments. E
 
 ## What I've learned
 
+### Watch every quota — Resend *and* Anthropic
+
+Today I hit two quota walls inside four hours. First Resend (100 emails/day free tier) at ~80% by mid-morning, fixed with a `?skip_notify=1` escape hatch. Then — partway through a regression sweep that was itself designed to verify the calibration completion didn't break anything — my Anthropic API credit balance ran out. Midway through the 80-run sweep, every remaining call returned "credit balance too low." The production site itself went down for anyone who tried to use it, because the live `/api/evaluate` endpoint also hit the same error.
+
+Generalizable lesson: when an app depends on third-party metered resources, "is it up?" isn't just a code question. Each external quota is a silent failure domain — Resend rejects email sends, Anthropic rejects evaluations, OpenAI would reject transcription calls. Each one needs a monitor, or at least a pre-flight check I run before kicking off a batch study. The operational discipline of "top up + check balance before any bulk run" goes next to the "never share the URL the same day I'm running a calibration sweep" rule.
+
+For the portfolio story this is actually a feature, not a bug: AI-assisted tools have *real operational surfaces* that don't exist for the classic "SaaS form → database" architecture. Understanding and managing those surfaces is part of the craft.
+
 ### Calibration is only as complete as its boundary coverage
 
 The first calibration pass (2026-04-23) killed variance on identical input — 10-point spread dropped to zero on the mid-tier pitch. I declared the problem solved. Then the generalization study confirmed it held on easy extremes (weak at 20/100 with no drift, strong at 100/100 with no drift). Looked like a clean win.
@@ -194,6 +223,6 @@ Lesson: silent-skip should *log* when it skips, even if it doesn't raise. A sing
 
 - ~~**Does the calibration generalize?**~~ **Closed 2026-04-23.** Tested against weak (20/100), mid (82/100), and strong (100/100) pitches. Stdev 0 on all three. The structural framing holds across pitch style.
 - ~~**Boundary probing.**~~ **Closed 2026-04-23.** Borderline pitch study (n=16) showed Opening and Customer Problem hold deterministically; Value Prop and Call to Action drift at the meets/developing boundary where I hadn't written explicit guidance. Answer to the question: calibration is boundary-specific. Not yet complete.
-- **Finish the calibration.** Write explicit meets/developing boundary guidance for Value Prop and CTA. Structure matches the existing meets/exceeds guidance for Opening and Customer Problem: concrete "this is developing, this is meets" examples anchored to structural signals. Next session's work.
+- ~~**Finish the calibration.**~~ **Closed 2026-04-23.** Shipped meets/developing boundary guidance for Value Prop and CTA. Re-ran borderline study (n=20 with `?skip_notify=1`). Overall score: 46/100 every run, stdev 0. All four coached dimensions now deterministic at their previously-drifting boundaries.
 - **Is zero variance actually desirable?** For a scoring tool yes. For a coaching tool, maybe some variance in numerical call is fine if the coaching is consistent. The prose *is* varying run-to-run; only the score is frozen. Worth revisiting once a wider pitch corpus is in.
 - **Video coaching phase.** The next major feature — capture video, extract keyframes, score presence/eye-contact/delivery via Claude multimodal. Planned but not shipped. Mitigations (640×480 keyframes, 4 frames not 8, cached visual rubric) baked into the plan from day 1.
