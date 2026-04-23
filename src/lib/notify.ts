@@ -13,15 +13,22 @@ import type { EvaluationResult } from "./evaluate";
  * without domain verification as long as the recipient is a verified
  * address on the Resend account.
  */
+export type NotifyOutcome =
+  | { status: "skipped"; reason: string }
+  | { status: "sent"; id?: string }
+  | { status: "error"; message: string };
+
 export async function sendSubmissionEmail(
   result: EvaluationResult,
-): Promise<void> {
+): Promise<NotifyOutcome> {
   const apiKey = process.env.RESEND_API_KEY;
   const to = process.env.ADMIN_EMAIL;
 
   if (!apiKey || !to) {
-    // Feature is opt-in via env vars. Silently skip when not configured.
-    return;
+    return {
+      status: "skipped",
+      reason: !apiKey ? "no RESEND_API_KEY" : "no ADMIN_EMAIL",
+    };
   }
 
   try {
@@ -29,14 +36,23 @@ export async function sendSubmissionEmail(
     const body = buildPlaintextReport(result);
     const subject = `Pitch submission · ${result.overallScore}/100 · ${LEVEL_LABELS[result.verdictLevel]}`;
 
-    await resend.emails.send({
+    const response = await resend.emails.send({
       from: "Elevator Pitch Evaluator <onboarding@resend.dev>",
       to,
       subject,
       text: body,
     });
+
+    if (response.error) {
+      return {
+        status: "error",
+        message: `${response.error.name ?? ""}: ${response.error.message ?? JSON.stringify(response.error)}`,
+      };
+    }
+    return { status: "sent", id: response.data?.id };
   } catch (error) {
-    // Never let email trouble break the evaluation path.
+    const msg = error instanceof Error ? error.message : String(error);
     console.error("sendSubmissionEmail failed:", error);
+    return { status: "error", message: msg };
   }
 }
