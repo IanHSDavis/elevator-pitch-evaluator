@@ -20,6 +20,31 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-23 — Boundary-probe study: found where the calibration ends
+
+Wrote a deliberately-borderline pitch — generic category frame, role-named-but-not-quantified problem, mechanism-vague Value Prop, soft CTA — and ran a 16-sample study (stopped early; Resend's 100/day free-tier quota was approaching its cap). Results were more interesting than if the calibration had held flat:
+
+- **Opening & Credibility: meets 16/16.** Deterministic. Stdev 0.
+- **Customer Problem: meets 16/16.** Deterministic. Stdev 0.
+- **Value Proposition: developing 10 / meets 6.** Drift.
+- **Call to Action: developing 15 / meets 1.** Heavy drift toward developing.
+
+Overall: mean 50.25, stdev 5.0, range 46–56 — basically the same variance the calibration fixed earlier.
+
+**The pattern: the two dimensions I wrote explicit meets-vs-exceeds boundary guidance for (Opening, Customer Problem) held. The two I didn't write guidance for (Value Prop, CTA) drifted.** Important nuance: the drift lives at the meets/**developing** boundary, not the meets/**exceeds** boundary I originally targeted. On this pitch, Claude can't decide whether "helps PMs prioritize better by giving them a clearer view" is a minimally-functional Value Prop or a feature-fluff Developing; can't decide whether "chat more about this sometime if you're interested" is an invitation or a trail-off.
+
+Claude's harsh read is probably more defensible than my "this is meets" prediction. The drift here isn't a bug — it's Claude legitimately finding the pitch on a fence I hadn't marked. The fix is to mark it: explicit meets/developing boundary guidance for Value Prop and CTA, same structural shape as the earlier guidance. Saved for next session.
+
+Commits: [`e48d35e`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/e48d35e) (escape hatch — see below).
+
+### 2026-04-23 — Added ?skip_notify=1 escape hatch on /api/evaluate
+
+Ran into a real operational bug doing the boundary probe: the Resend free tier caps at 100 emails/day, and my calibration studies were emailing me the full report on every single evaluation. By noon today we were at 80% of quota, and the borderline study would have pushed us over.
+
+Shipped a query-param escape hatch — `/api/evaluate?skip_notify=1` skips the admin email. Default behavior (real visitors recording real pitches) unchanged. Our calibration curls now pass the flag.
+
+No auth on it. The theoretical downside is that a visitor could opt out of admin notification, which is effectively fine — the notification is a tool for me, not a surveillance mechanism. This isn't a security boundary, it's a quota-management knob.
+
 ### 2026-04-23 — Demo selector + calibration generalization study
 
 Added two new demo pitches alongside the existing TrackTide: a deliberately-weak one (no identity, no problem, feature dump, vague close, 28s) and a deliberately-strong one (specific role, anchored problem, mechanism + outcome with proof, optioned CTA, 62s). Landing page now shows a small "Or try a demo: weak · mid · strong" selector.
@@ -117,6 +142,16 @@ These are the specific "I hit this wall commercially; here's the fix" moments. E
 
 ## What I've learned
 
+### Calibration is only as complete as its boundary coverage
+
+The first calibration pass (2026-04-23) killed variance on identical input — 10-point spread dropped to zero on the mid-tier pitch. I declared the problem solved. Then the generalization study confirmed it held on easy extremes (weak at 20/100 with no drift, strong at 100/100 with no drift). Looked like a clean win.
+
+The borderline study exposed what I'd missed: I wrote explicit meets/exceeds boundary guidance for two dimensions (Opening, Customer Problem). I didn't write boundary guidance for the other two (Value Prop, CTA). And I didn't write meets/developing boundary guidance for any of them.
+
+On easy pitches — strong or weak — this doesn't matter because the pitch is so clearly one or the other that no boundary gets tested. On the middle-tier TrackTide pitch, the two guidance'd dimensions are the ones at their boundary, so the guidance did the work. On a pitch that sits at the meets/developing boundary on the *un*-guidance'd dimensions, the drift reappears.
+
+Generalizable lesson for calibrated prompt-engineering: variance reduction is boundary-specific, not model-wide. Every boundary in the rubric needs explicit guidance — or it'll drift whenever a pitch lands on that boundary. Finishing the calibration means writing rules for every meets/exceeds *and* meets/developing edge, for every dimension. What I shipped yesterday was one-third of the calibration work. The rest is more of the same pattern.
+
 ### Structural calibration generalizes; surface-level calibration doesn't
 
 When I wrote the boundary guidance into the prompt, I was worried I'd overfit to TrackTide-specific wording ("I run a small SaaS company called TrackTide" → meets). Would the rule hold up against a pitch that said "I lead a seed-stage startup doing AI governance" or any other structurally-similar-but-lexically-different framing?
@@ -158,6 +193,7 @@ Lesson: silent-skip should *log* when it skips, even if it doesn't raise. A sing
 ## Open questions / next
 
 - ~~**Does the calibration generalize?**~~ **Closed 2026-04-23.** Tested against weak (20/100), mid (82/100), and strong (100/100) pitches. Stdev 0 on all three. The structural framing holds across pitch style.
+- ~~**Boundary probing.**~~ **Closed 2026-04-23.** Borderline pitch study (n=16) showed Opening and Customer Problem hold deterministically; Value Prop and Call to Action drift at the meets/developing boundary where I hadn't written explicit guidance. Answer to the question: calibration is boundary-specific. Not yet complete.
+- **Finish the calibration.** Write explicit meets/developing boundary guidance for Value Prop and CTA. Structure matches the existing meets/exceeds guidance for Opening and Customer Problem: concrete "this is developing, this is meets" examples anchored to structural signals. Next session's work.
 - **Is zero variance actually desirable?** For a scoring tool yes. For a coaching tool, maybe some variance in numerical call is fine if the coaching is consistent. The prose *is* varying run-to-run; only the score is frozen. Worth revisiting once a wider pitch corpus is in.
-- **Boundary probing** — next calibration pass worth running: pitches that sit *intentionally* on rubric boundaries (e.g., a pitch with a specific role but no quantified frustration; a pitch with mechanism but no proof point). These three-pitch categories are easy cases at the extremes. The harder, more informative test is deliberately-borderline pitches.
 - **Video coaching phase.** The next major feature — capture video, extract keyframes, score presence/eye-contact/delivery via Claude multimodal. Planned but not shipped. Mitigations (640×480 keyframes, 4 frames not 8, cached visual rubric) baked into the plan from day 1.
