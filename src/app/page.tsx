@@ -14,7 +14,7 @@ import {
   buildTranscriptSegments,
   toSuperscript,
 } from "@/lib/highlights";
-import { DEMO_PITCH } from "@/lib/demoPitch";
+import { DEMO_PITCHES, getDemoPitch, type DemoPitchId } from "@/lib/demoPitch";
 import {
   clearHistory,
   loadHistory,
@@ -351,11 +351,12 @@ export default function Home() {
     });
   }
 
-  function onDemoPitch() {
+  function onDemoPitch(id: DemoPitchId) {
+    const pitch = getDemoPitch(id);
     runFullPipeline({
       audioBlobForTranscribe: null,
-      presetTranscript: DEMO_PITCH.transcript,
-      durationSeconds: DEMO_PITCH.durationSeconds,
+      presetTranscript: pitch.transcript,
+      durationSeconds: pitch.durationSeconds,
     });
   }
 
@@ -489,7 +490,7 @@ function LandingScreen({
 }: {
   error: ErrorState | null;
   onStart: () => void;
-  onDemo: () => void;
+  onDemo: (id: DemoPitchId) => void;
   onUpload: (file: File) => void;
 }) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -545,21 +546,34 @@ function LandingScreen({
               judge what you give us.
             </div>
           </div>
-          <div className="flex gap-6 mt-1.5 font-mono text-[11px] tracking-[0.12em] uppercase">
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink"
-            >
-              Upload audio instead
-            </button>
-            <button
-              type="button"
-              onClick={onDemo}
-              className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink"
-            >
-              Try a demo pitch
-            </button>
+          <div className="flex flex-col gap-3 mt-1.5">
+            <div className="flex gap-6 font-mono text-[11px] tracking-[0.12em] uppercase">
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink"
+              >
+                Upload audio instead
+              </button>
+            </div>
+            <div className="flex items-baseline gap-3 font-mono text-[11px] tracking-[0.12em] uppercase text-ink-faint flex-wrap">
+              <span>Or try a demo:</span>
+              {DEMO_PITCHES.map((p, i) => (
+                <span key={p.id} className="flex items-baseline gap-3">
+                  <button
+                    type="button"
+                    onClick={() => onDemo(p.id)}
+                    title={p.blurb}
+                    className="bg-transparent border-0 text-ink-dim cursor-pointer p-0 border-b border-line pb-[3px] hover:text-ink hover:border-ink tracking-[0.12em] uppercase"
+                  >
+                    {p.label}
+                  </button>
+                  {i < DEMO_PITCHES.length - 1 ? (
+                    <span aria-hidden>·</span>
+                  ) : null}
+                </span>
+              ))}
+            </div>
           </div>
           <input
             ref={fileInputRef}
