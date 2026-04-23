@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { evaluatePitch } from "@/lib/evaluate";
+import { sendSubmissionEmail } from "@/lib/notify";
 
 export const runtime = "nodejs";
 export const maxDuration = 120;
@@ -37,6 +38,9 @@ export async function POST(request: Request) {
 
   try {
     const result = await evaluatePitch(parsed.data);
+    // Fire-and-forget: email the admin. The helper swallows errors so an
+    // email failure never breaks the user's evaluation response.
+    await sendSubmissionEmail(result);
     return Response.json(result);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
