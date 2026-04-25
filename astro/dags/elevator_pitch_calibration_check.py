@@ -16,8 +16,10 @@ deterministic *today*. This DAG is the early-warning system that says:
 It does this by hitting the live `/api/evaluate` endpoint with our
 three reference demo pitches (weak / mid / strong), comparing the
 returned score against a pinned baseline, and failing the run if any
-pitch drifts beyond a tolerance band. A failed run surfaces in the
-Astro UI as a red task — the operator sees it the next morning.
+pitch drifts beyond a tolerance band. The DAG fires at 7:30 AM ET
+daily — inside the deployment's 7–9 AM ET wake window — so a failed
+run is the first thing visible in the Astro UI when the operator
+checks at the start of their day.
 
 WHY THIS IS A GOOD FIT FOR A DAG
 --------------------------------
@@ -48,9 +50,17 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pendulum
 import requests
 from airflow.decorators import dag, task
 from airflow.exceptions import AirflowException
+
+# All schedules in this DAG are interpreted in Eastern time so that the
+# fire window stays inside the deployment's 7–9 AM ET wake schedule
+# year-round, regardless of DST. Airflow uses pendulum for tz-aware
+# scheduling — anchoring start_date with this tz makes the cron string
+# Eastern-relative.
+LOCAL_TZ = pendulum.timezone("America/New_York")
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -138,14 +148,17 @@ DEMO_PITCHES: dict[str, dict] = {
 @dag(
     dag_id="elevator_pitch_calibration_check",
     description=(
-        "Nightly regression check: scores the three reference demo pitches "
+        "Daily regression check: scores the three reference demo pitches "
         "against the live /api/evaluate endpoint and fails the run if any "
         "score drifts beyond ±5 points from its calibrated baseline."
     ),
-    # 8:00 UTC daily — 4:00am Eastern, after any same-day prompt
-    # iteration would have shipped and Vercel would have redeployed.
-    schedule="0 8 * * *",
-    start_date=datetime(2026, 4, 25),
+    # 7:30 AM Eastern, every day. Anchored to America/New_York via
+    # start_date so DST shifts don't drift us out of the deployment's
+    # 7–9 AM ET wake window. 30-minute lead-in lets the deployment
+    # warm up after wake; 1.5 hours after gives room for retries
+    # before hibernation kicks back in at 9 AM.
+    schedule="30 7 * * *",
+    start_date=datetime(2026, 4, 25, tzinfo=LOCAL_TZ),
     catchup=False,
     max_active_runs=1,
     tags=["elevator-pitch-evaluator", "calibration", "regression-detection"],
