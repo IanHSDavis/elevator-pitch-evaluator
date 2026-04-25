@@ -11,26 +11,45 @@ That bar is qualitative. Scoring stdev tells you nothing about whether the coach
 
 ## Method
 
-1. Captured live `/api/evaluate` output for all three demo pitches (weak / mid / strong) against prod.
-2. Ran a second Claude call with a "20-yr enablement leader at a major cloud company" persona, asked to critique *the coaching* (not the pitch). Bar set explicitly to "what a senior sales coach would write," not "plausible feedback."
+1. Capture live `/api/evaluate` output for all three demo pitches (weak / mid / strong) against prod.
+2. Run a second Claude call with a "20-yr enablement leader at a major cloud company" persona, asked to critique *the coaching* (not the pitch). Bar set explicitly to "what a senior sales coach would write," not "plausible feedback."
 3. Critic produces structured output: depth score 1–10, gaps the coaching missed (with the exact wording a real coach would use), things the coaching got right, and a single "one cut."
 
-Critic system prompt is checked in via the script that produced these artifacts (run was ephemeral; prompt is summarized in LEARNINGS entry for the date).
+Each iteration of the prompt gets its own subfolder so the depth scores can be tracked over time.
 
-## Headline result
+## Iterations
 
-| Pitch | Eval score | Critic depth score |
+### v1-baseline (2026-04-24)
+
+System prompt as it stood at commit `eb7a8f3`. Three pitches, three critiques.
+
+| Pitch | Eval score | Critic depth |
 |---|---|---|
-| weak | 20/100 | 5/10 |
-| mid | 74/100 | 5/10 |
-| strong | 100/100 | 5/10 |
+| weak | 20/100 | **5/10** |
+| mid | 74/100 | **5/10** |
+| strong | 100/100 | **5/10** |
 
-All three coaching outputs scored 5/10 — including the one that gave the pitch itself a perfect score. The tool is competent but not seasoned. The L7-trainer bar is not yet hit.
+Five patterns identified across the critiques: no posture read, no tactical sales-craft, no discovery instinct, treats symptoms as separate problems, praise inflation when rubric is satisfied. See LEARNINGS entry 2026-04-24 for the synthesis.
+
+### v2-posture-instruction (2026-04-24)
+
+Added a posture-read instruction to `overall_impression` (commit `9e7a697`). Hypothesis: when posture is load-bearing, name it explicitly; otherwise stay in the structural read.
+
+| Pitch | Eval score | Critic depth | Δ from v1 |
+|---|---|---|---|
+| weak | 20/100 | **7/10** | **+2** ✅ |
+| mid | 72/100 | 5/10 | 0 (correct null — posture wasn't the lever) |
+| strong | 100/100 | **4/10** | **−1** (regression — see below) |
+
+**Verdict:** the targeted intervention worked exactly as designed on the case it was designed for. The strong-pitch regression came from the new "posture as a strength" line ("posture is confident without being performative") compounding the praise-inflation pattern that was already the dominant gap on rubric-satisfied pitches. That points cleanly at Pattern 5 as the next iteration target.
+
+## What's next
+
+**v3 candidate: praise-inflation correction.** Instruction shape: a pitch that meets every rubric criterion can still have tactical issues a senior coach would catch — score the rubric, then look one layer deeper. Same `overall_impression` slot. Should directly fix the v2 strong-pitch regression and is the dominant gap on high-scoring pitches.
 
 ## Files
 
-- `critique-weak.md`, `critique-mid.md`, `critique-strong.md` — raw critic output per pitch.
+- `v1-baseline/critique-{weak,mid,strong}.md` — raw critic output, baseline.
+- `v2-posture-instruction/critique-{weak,mid,strong}.md` — raw critic output after posture instruction added.
 
-## Patterns identified
-
-See LEARNINGS.md entry for 2026-04-24 for the synthesis and the prompt-engineering roadmap that came out of these critiques.
+The critic system prompt is summarized in LEARNINGS.md; the script that ran it is ephemeral (lives outside the repo).

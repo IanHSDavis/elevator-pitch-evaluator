@@ -20,6 +20,28 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-24 — Coaching prompt iteration v2: posture-read instruction lands +2 on the targeted pitch
+
+First iteration off the red-team roadmap. Pattern 1 (no posture read) hit all three pitches in the baseline; the critic kept saying that one posture call would change more for the rep than three structural rewrites. So I added a single instruction to `overall_impression`: when the highest-leverage move is posture-level (apologetic stance, founder-showing-off, hedged ask, pitching-at-buyer instead of qualifying), name it and lead with it — with an explicit "if it doesn't read clearly, do not manufacture one" hedge to avoid forcing posture commentary onto every pitch.
+
+Re-ran the full red-team loop against the deployed change (commit [`9e7a697`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/9e7a697)).
+
+| Pitch | Eval score | Critic depth v1 | Critic depth v2 | Δ |
+|---|---|---|---|---|
+| weak | 20/100 | 5/10 | **7/10** | **+2** ✅ |
+| mid | 72/100 | 5/10 | 5/10 | 0 (null — correct) |
+| strong | 100/100 | 5/10 | **4/10** | **−1** (regression) |
+
+**The targeted intervention worked.** The weak pitch's new `overall_impression` opens with *"The biggest lever here is posture, not phrasing. The pitch is in founder-showing-off mode — adjectives stacked on adjectives, no buyer in the frame, and a closing line that apologizes for taking the listener's time."* Critic v2: *"The 'founder-showing-off mode' diagnosis is accurate and named the right root cause."*
+
+**The mid pitch correctly didn't move.** The hedge held — coaching stayed in structural-read mode where posture wasn't the lever. Score didn't move because the mid pitch's gaps are different patterns (tactical sales-craft, discovery instinct), neither of which this iteration touched. The "do not manufacture a posture call" instruction is doing real work.
+
+**The strong-pitch regression is the most interesting finding.** The new instruction added *"the posture is confident without being performative — Maya is qualifying, not pleading"* to coaching that was already too celebratory on a rubric-satisfied pitch. Critic v2 verdict: *"Generic 'exceeds' rubber-stamping that confuses a well-structured pitch with a strong one."* The 4/10 is anchored on Pattern 5 (praise inflation when rubric is satisfied), and the new posture-as-strength line fed it. Lesson: when the dominant pattern on a class of pitches is praise inflation, *adding things to praise* makes it worse before any other fix lands. Pattern 5 is the next iteration target — same `overall_impression` slot, instruction shape "score the rubric, then look one layer deeper for tactical issues a senior coach would catch."
+
+**The methodology check is the bigger result.** The iterate-and-measure loop is real: shipped a targeted prompt change, ran a measurement, got a +2 swing on the case it was designed for, got useful directional signal on the cases it wasn't, and the regression itself pointed cleanly at the next pattern to tackle. That's the pattern this project should keep using — small targeted prompt changes, quantified critic measurement, iterate. Not "ship a big prompt rewrite and hope."
+
+Artifacts: `studies/2026-04-24-coaching-redteam/v2-posture-instruction/` has the raw v2 critiques. v1 baseline is in the sibling `v1-baseline/` folder.
+
 ### 2026-04-24 — Coaching-quality red team: the rubric is calibrated; the coaching is not yet seasoned
 
 The calibration arc (closed yesterday) verified the rubric scores pitches consistently. That's a different question from: **does the coaching itself read like a 15–20yr sales manager wrote it?** Scoring stdev tells you nothing about coaching quality.
