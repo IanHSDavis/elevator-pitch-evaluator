@@ -20,6 +20,19 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-24 — Resilience: friendly errors + retry budget for upstream Anthropic failures
+
+In 24 hours prod surfaced two scary-looking 500s to users with raw provider JSON in the body. First was `credit balance is too low` mid-calibration sweep (yesterday). Second was `529 Overloaded` when I tried to smoke-test prod after topping up credits — turns out Opus 4.7 was in a real outage on Anthropic's status page. Both rendered in the UI as "Evaluation failed" with the raw upstream message dumped in.
+
+For a portfolio piece a recruiter might click into, that's the wrong failure mode. The fix in [`a10c2ea`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/a10c2ea) does two things:
+
+1. **Bumped Anthropic SDK `maxRetries` from default 2 → 4.** The SDK already retries 5xx with exponential backoff; 4 attempts gives more chances to slip through transient overload. Free, transparent to users.
+2. **Translated upstream errors into friendly messages.** New `EvaluatePitchError` class in `evaluate.ts` catches the SDK's `APIError`, classifies by status code + message regex, and rethrows with a user-safe string ("The evaluation model is temporarily overloaded. Please try again in a moment.") and a 503 status hint. The route layer surfaces that directly. Raw error still hits server logs for debugging.
+
+Smoke-tested prod after deploy: full evaluation came back clean (overall 88, 5/5 met, all dimensions populated). The friendly-error path didn't fire because Anthropic recovered, but the structure is in place for next time.
+
+**Lesson worth keeping:** any external dependency whose errors are user-visible needs a translation layer between the SDK and the route. Without one, every provider blip becomes a UX incident. The cost is ~30 lines of code; the alternative is a recruiter seeing `"529 {\"type\":\"error\"...}"` rendered in your demo at exactly the wrong moment.
+
 ### 2026-04-23 — Calibration complete: boundary guidance closes the gap
 
 Wrote meets/developing boundary guidance for Value Proposition and Call to Action — the same structural shape as the meets/exceeds guidance I had for Opening and Customer Problem. The rules:
