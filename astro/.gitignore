@@ -1,0 +1,20 @@
+# Astro CLI metadata (regenerated locally)
+.astro/
+
+# Local Airflow state (databases, logs)
+airflow_settings.yaml
+logs/
+plugins/__pycache__/
+dags/__pycache__/
+tests/__pycache__/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Editor
+.vscode/
+.idea/

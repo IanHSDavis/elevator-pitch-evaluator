@@ -1,4 +1,12 @@
-# Elevator Pitch Evaluator
+# Elevator Pitch Evaluator — `astronomer-integration` branch
+
+> **You are on the `astronomer-integration` branch.** This branch adds an [Astronomer Astro](https://www.astronomer.io/) project under [`astro/`](./astro/) with one nightly Airflow DAG that runs regression checks against the deployed evaluator. The lean version of the project — Next.js + Claude only, no orchestration — lives on [`main`](https://github.com/IanHSDavis/elevator-pitch-evaluator/tree/main).
+>
+> This split exists because the orchestration layer is an experiment: durable value vs. interview talking-point is exactly the kind of thing you only know after running it. Branch keeps the evaluation honest.
+>
+> See [`astro/README.md`](./astro/README.md) for the DAG and how to run it.
+
+---
 
 An open-source tool that listens to a 60–90 second elevator pitch and returns structured, coaching-oriented feedback against a rubric — powered by Whisper for transcription and Claude for evaluation.
 

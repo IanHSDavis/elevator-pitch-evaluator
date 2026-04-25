@@ -1,0 +1,7 @@
+# Python dependencies for DAGs.
+# Astro Runtime already includes Apache Airflow + the core providers,
+# so we only declare what's not in the base image.
+#
+# requests is used by elevator_pitch_calibration_check to call the
+# deployed /api/evaluate endpoint.
+requests==2.32.3
