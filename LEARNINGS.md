@@ -20,6 +20,33 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-25 — Coaching prompt iteration v3: praise-inflation guard moves the strong pitch +3
+
+Second iteration off the red-team roadmap. Pattern 5 (praise inflation when the rubric is satisfied) was the dominant gap on the strong demo pitch and was made worse in v2 by a posture-as-strength celebration line. So I added a single instruction to `overall_impression`: when the rubric is fully satisfied, look one layer deeper for tactical issues a senior coach would catch — founder-voice vocabulary, proof points that telegraph early-stage, surveilling-vs-researched lines, pitching where discovery is needed. Examples drawn directly from the v2 critic's strong-pitch critique. Honesty escape hatch built in so genuinely excellent pitches don't get manufactured criticism.
+
+Re-ran the full red-team loop against the deployed change (commit [`000caaf`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/000caaf)).
+
+| Pitch | Eval score | v1 | v2 | v3 | Δ from v2 |
+|---|---|---|---|---|---|
+| weak | 20/100 | 5/10 | 7/10 | 6.5/10 | −0.5 (noise) |
+| mid | 82/100 | 5/10 | 5/10 | 6/10 | +1 |
+| strong | 100/100 | 5/10 | 4/10 | **7/10** | **+3** ✅ |
+| **avg** | | **5.0** | **5.3** | **6.5** | |
+
+**The targeted intervention landed hard.** Strong-pitch `overall_impression` now contains all four catches the v2 critic identified — *"'Compliance wedge' is category language a CFO wouldn't use about themselves, 'first twelve customers' telegraphs early-stage to a risk-averse buyer, and 'I know your team just closed a B round' reads as surveilling unless you name the source."* Verdict line shifted from *"A masterclass"* to *"Rubric-clean and confident — now sand off the founder-voice tells."* The v3 critic explicitly acknowledges the catches: *"Better than typical tool output — it actually names tactical tells like 'wedge' and 'first twelve customers'."*
+
+**Mid lift was a pleasant surprise.** Hypothesis was no movement (rubric not fully satisfied). Got +1 anyway, likely from the prompt's cumulative coherence improving. Weak dipped 0.5 with the critique pattern unchanged from v2 — noise.
+
+**Two-iteration trajectory:** average critic depth across pitches moved from 5.0 (baseline) → 5.3 (v2) → 6.5 (v3). The iterate-and-measure loop continues to deliver measurable depth gains. Each intervention has been small (one or two paragraphs of prompt instruction), targeted, and verified by a critic with a clear standard.
+
+**Two new findings from this round:**
+
+1. *The v3 critic spotted a real bug in the strong demo pitch itself:* "six weeks chasing engineers" in the problem statement contradicts "eight weeks to ten days" in the value prop. Nobody had caught this — not the prior critics, not me, not the tool. *"A sharp CFO catches that in real time and now they're doing math instead of listening."* Worth fixing in `src/lib/demoPitch.ts` separately from the coaching iteration.
+
+2. *Pattern 4 is now the dominant remaining gap* across all three pitches. The v3 critiques all flag "menus instead of cuts" — the coaching gives "e.g. ..." options when it should pick one and commit. That's the next iteration target. It also lives in a different slot from posture and praise-inflation (per-dimension `coaching` field rather than `overall_impression`), which keeps the prompt-engineering surface clean.
+
+Artifacts: `studies/2026-04-24-coaching-redteam/v3-praise-inflation-guard/`.
+
 ### 2026-04-24 — Coaching prompt iteration v2: posture-read instruction lands +2 on the targeted pitch
 
 First iteration off the red-team roadmap. Pattern 1 (no posture read) hit all three pitches in the baseline; the critic kept saying that one posture call would change more for the rep than three structural rewrites. So I added a single instruction to `overall_impression`: when the highest-leverage move is posture-level (apologetic stance, founder-showing-off, hedged ask, pitching-at-buyer instead of qualifying), name it and lead with it — with an explicit "if it doesn't read clearly, do not manufacture one" hedge to avoid forcing posture commentary onto every pitch.
