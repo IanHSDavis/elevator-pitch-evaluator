@@ -156,7 +156,9 @@ DEMO_PITCHES: dict[str, dict] = {
     # start_date so DST shifts don't drift us out of the deployment's
     # 7–9 AM ET wake window. 30-minute lead-in lets the deployment
     # warm up after wake; 1.5 hours after gives room for retries
-    # before hibernation kicks back in at 9 AM.
+    # before hibernation kicks back in at 9 AM. The deployment is
+    # billed only while awake, so the schedule and the wake window
+    # are effectively the same contract — change one, change the other.
     schedule="30 7 * * *",
     start_date=datetime(2026, 4, 25, tzinfo=LOCAL_TZ),
     catchup=False,
