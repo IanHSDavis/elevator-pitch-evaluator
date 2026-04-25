@@ -20,6 +20,38 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-24 — Coaching-quality red team: the rubric is calibrated; the coaching is not yet seasoned
+
+The calibration arc (closed yesterday) verified the rubric scores pitches consistently. That's a different question from: **does the coaching itself read like a 15–20yr sales manager wrote it?** Scoring stdev tells you nothing about coaching quality.
+
+So I red-teamed the coaching against the L7-trainer bar. Method: capture live `/api/evaluate` output for all three demo pitches, then run a second Claude call with a "20-yr enablement leader at a major cloud company" persona instructed to critique *the coaching, not the pitch*. Output: structured critique with a depth score (1–10), specific gaps with the exact wording a real coach would use, and one "if you only got one piece of coaching, it's this" line per pitch.
+
+Headline:
+
+| Pitch | Eval score | Critic depth score |
+|---|---|---|
+| weak | 20/100 | **5/10** |
+| mid | 74/100 | **5/10** |
+| strong | 100/100 | **5/10** |
+
+All three coaching outputs scored 5/10 — including the one that earned the pitch a perfect 100. The tool is *competent* but not *seasoned*. The L7-trainer bar is not yet hit. (Raw critiques in `studies/2026-04-24-coaching-redteam/`.)
+
+**The five patterns the critic kept calling out:**
+
+1. **No posture read.** The coaching stays in word-level edits and never names the rep's underlying stance. Critic on weak pitch: *"'I think you'd like it' is a tell — they don't believe they have the right to ask."* On mid: *"Right now you sound like a founder showing off the product."* On strong: *"'Compliance wedge' is a founder word, not a CFO word."* All three reps would change more from one posture call than three structural rewrites.
+
+2. **Tactical sales-craft is absent.** Single-word credibility kills go uncaught — "we're **building**" (founder-tell), "**small** SaaS company" (self-discounting), "**first** twelve customers" (CFO hears "experiment"). These are exactly the catches a real manager would make instantly.
+
+3. **No discovery instinct.** The tool grades CTAs on whether they're specific (calendar mechanics). It never asks the harder question: *did the rep earn the right to make this ask?* Both mid and strong critiques flagged this.
+
+4. **Symptoms treated as separate problems.** The weak pitch gets four "developing" ratings and four coaching paragraphs. The critic: *"This pitch has one root cause — no ICP, no problem, no belief. Four paragraphs is homework, not coaching."* Reps act on one change at a time.
+
+5. **Praise inflation when the rubric is satisfied.** The strong pitch got `exceeds` on everything and the coaching congratulated. The critic still found real issues: the *"on next quarter's plan"* line is a built-in deferral trap; "compliance wedge" is founder-voice; no discovery before the demo ask. Calibration logic says "structurally clean = ready to run." A senior coach knows it doesn't.
+
+**What this gives us — a concrete prompt-engineering roadmap.** Each pattern maps to a system-prompt addition: name the posture, catch the credibility-kill words, ask whether the CTA earned itself, prioritize one cut over four rewrites, separate the rubric pass from the senior-coach pass. Next session: pick one pattern, ship the prompt change, re-run the red team, see the score move.
+
+**The lesson:** *calibration ≠ depth.* You can lock down a rubric to deterministic scores and still produce coaching a senior manager would call mid. The two have to be measured separately, or you'll declare victory on consistency and ship something that reads competent-but-shallow at exactly the moment it needs to read insightful. Adding the senior-coach critic as a second-judge layer is a cheap, repeatable check; it should be a permanent part of the iteration loop.
+
 ### 2026-04-24 — Resilience: friendly errors + retry budget for upstream Anthropic failures
 
 In 24 hours prod surfaced two scary-looking 500s to users with raw provider JSON in the body. First was `credit balance is too low` mid-calibration sweep (yesterday). Second was `529 Overloaded` when I tried to smoke-test prod after topping up credits — turns out Opus 4.7 was in a real outage on Anthropic's status page. Both rendered in the UI as "Evaluation failed" with the raw upstream message dumped in.
