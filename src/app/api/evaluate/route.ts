@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { evaluatePitch } from "@/lib/evaluate";
+import { evaluatePitch, EvaluatePitchError } from "@/lib/evaluate";
 import { sendSubmissionEmail } from "@/lib/notify";
 
 export const runtime = "nodejs";
@@ -52,6 +52,14 @@ export async function POST(request: Request) {
     }
     return Response.json(result);
   } catch (error) {
+    // Typed errors carry a friendly user-facing message and a status
+    // hint (e.g. 503 for upstream overload) — return as-is.
+    if (error instanceof EvaluatePitchError) {
+      return Response.json(
+        { error: error.message },
+        { status: error.statusHint },
+      );
+    }
     const message = error instanceof Error ? error.message : String(error);
     console.error("evaluatePitch failed:", error);
     return Response.json({ error: message }, { status: 500 });

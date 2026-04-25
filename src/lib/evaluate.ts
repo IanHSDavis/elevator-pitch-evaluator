@@ -18,6 +18,27 @@ import { PitchEvaluationSchema, type PitchEvaluation } from "./schemas";
 
 const MODEL = "claude-opus-4-7";
 
+/**
+ * Thrown when evaluatePitch fails in a way the user-facing route should
+ * surface with a specific HTTP status and a friendly message. Catches
+ * upstream overload (529) and credit/auth issues — both of which were
+ * leaking raw provider errors to users in prod (see LEARNINGS).
+ */
+export class EvaluatePitchError extends Error {
+  constructor(
+    message: string,
+    readonly statusHint: number = 500,
+  ) {
+    super(message);
+    this.name = "EvaluatePitchError";
+  }
+}
+
+const FRIENDLY_OVERLOADED =
+  "The evaluation model is temporarily overloaded. Please try again in a moment.";
+const FRIENDLY_UNAVAILABLE =
+  "The evaluation service is temporarily unavailable. Please try again later.";
+
 function buildSystemPrompt(): string {
   const dimensionText = DIMENSIONS.map((dim) => {
     const levels = PERFORMANCE_LEVELS.map(
@@ -142,7 +163,10 @@ export type EvaluationResult = {
 export async function evaluatePitch(
   input: EvaluationInput,
 ): Promise<EvaluationResult> {
-  const client = new Anthropic();
+  // maxRetries: 4 (SDK default is 2). Bumps the budget for transient
+  // upstream errors — primarily 529 overload during peak load on Opus.
+  // The SDK applies exponential backoff between retries.
+  const client = new Anthropic({ maxRetries: 4 });
 
   const userMessage = `Here is the pitch transcript to evaluate. Coach the speaker against the rubric.
 
@@ -150,23 +174,46 @@ export async function evaluatePitch(
 ${input.transcript.trim()}
 </transcript>`;
 
-  const response = await client.messages.parse({
-    model: MODEL,
-    max_tokens: 16000,
-    thinking: { type: "adaptive" },
-    output_config: {
-      effort: "high",
-      format: zodOutputFormat(PitchEvaluationSchema),
-    },
-    system: [
-      {
-        type: "text",
-        text: SYSTEM_PROMPT,
-        cache_control: { type: "ephemeral" },
+  let response;
+  try {
+    response = await client.messages.parse({
+      model: MODEL,
+      max_tokens: 16000,
+      thinking: { type: "adaptive" },
+      output_config: {
+        effort: "high",
+        format: zodOutputFormat(PitchEvaluationSchema),
       },
-    ],
-    messages: [{ role: "user", content: userMessage }],
-  });
+      system: [
+        {
+          type: "text",
+          text: SYSTEM_PROMPT,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [{ role: "user", content: userMessage }],
+    });
+  } catch (err: unknown) {
+    // Surface raw error to server logs; user-facing message is rewritten
+    // below to avoid leaking provider internals into the UI.
+    console.error("Anthropic call failed in evaluatePitch:", err);
+
+    const status = (err as { status?: number })?.status;
+    const rawMessage = err instanceof Error ? err.message : String(err);
+
+    if (status === 529 || /overloaded/i.test(rawMessage)) {
+      throw new EvaluatePitchError(FRIENDLY_OVERLOADED, 503);
+    }
+    if (
+      status === 401 ||
+      /credit balance is too low|insufficient_quota|invalid_api_key/i.test(
+        rawMessage,
+      )
+    ) {
+      throw new EvaluatePitchError(FRIENDLY_UNAVAILABLE, 503);
+    }
+    throw err;
+  }
 
   const parsed: PitchEvaluation | null = response.parsed_output;
   if (!parsed) {
