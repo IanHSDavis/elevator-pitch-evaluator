@@ -20,6 +20,34 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-04-25 — Coaching prompt iteration v4: one-cut instruction closes pattern 4 without moving the score
+
+Third iteration off the red-team roadmap. Pattern 4 ("menus instead of cuts") was the dominant remaining gap across all three v3 critiques — coaching kept handing the rep "e.g. ..." or "X or Y" rewrites where a senior coach would pick the single highest-leverage line and commit. So I added a one-line instruction to the per-dimension `coaching` field: when you'd otherwise list multiple rewrites, make the cut, give one specific line they can run Monday morning, and stop hedging. Lives in `coaching` rather than `overall_impression` to keep the prompt-engineering surface tidy (overall_impression now handles posture + praise-inflation; coaching handles specificity + decisiveness).
+
+Re-ran the full red-team loop against the deployed change (commit [`f6be4e6`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/f6be4e6)).
+
+| Pitch | Eval score | v1 | v2 | v3 | v4 | Δ from v3 |
+|---|---|---|---|---|---|---|
+| weak | 20/100 | 5/10 | 7/10 | 6.5/10 | 6/10 | −0.5 (noise) |
+| mid | 82/100 | 5/10 | 5/10 | 6/10 | 6/10 | 0 |
+| strong | 100/100 | 5/10 | 4/10 | 7/10 | 7/10 | 0 |
+| **avg** | | **5.0** | **5.3** | **6.5** | **6.33** | |
+
+**The targeted intervention landed at the pattern level. The depth score didn't move.** v3 critiques flagged "menu instead of cut" explicitly in *all three pitches*. v4 critiques don't flag it in any of them. The per-dimension coaching now reads as committed single-option rewrites — e.g., the v4 weak-pitch CTA coaching: *"Open with one specific question: 'Are conversion drops something your team is actively losing sleep over?' Then shut up and let them answer."* That's exactly the shape the instruction was designed to produce.
+
+**The critic moved to new gaps,** which is what kept the headline number flat:
+- **weak**: critic now says the rep doesn't have a wording problem, has a discovery problem — coaching should send them to talk to customers before rewriting the words
+- **mid**: no named proof attached to "20% reduction" ("our customers" is a faceless plural); CTA was inflated to 5/5 then coached as if it weren't
+- **strong**: persona mismatch — pitch opens with CFO pain that's actually security-lead pain ("CFOs sign the check, but it's the Head of Security getting beat up by engineers"); no named logo on the proof; coaching never produces a literal full-pitch rewrite
+
+**The methodological lesson: depth-score plateaus are real, and they don't mean the iteration failed.** The critic always finds *something* at this level — once a pattern is fixed, the critic shifts to the next gap. The signal is in *which patterns the critic stops naming*, not in the score moving up. The "one cut" pattern is verifiably gone from all three critiques. That's the win, even though the headline number is flat. If I'd been steering the prompt by depth score alone, I'd have wrongly concluded the change didn't work.
+
+**Three-iteration trajectory:** 5.0 (v1) → 5.3 (v2) → 6.5 (v3) → 6.33 (v4). The first three iterations delivered clear gains because each fixed a pattern that the critic was scoring against; v4 closed a specific pattern but the critic had room to find new gaps at the same severity. That's a natural ceiling shape — the relationship between intervention and score is not monotonic when the critic's complaint surface is large.
+
+**Brand-new finding from the v4 critic — buyer-persona mismatch in the strong demo pitch itself.** Maya's pitch opens with *"CFOs at growth-stage fintechs spend six weeks chasing engineers for audit evidence"* — but CFOs *fund* that pain; compliance leads / Heads of Security feel it daily. Pair this with the already-flagged numerical inconsistency (six weeks in the problem vs eight weeks in the value prop) and `src/lib/demoPitch.ts` clearly needs a small fixture pass independent of the coaching iteration. Worth doing before the Astronomer interview demo Monday.
+
+**v5 candidate (from the v4 strong critique):** *"Three 'try' suggestions, zero rewrites of the actual pitch — coaching that doesn't produce a literal new script doesn't change Monday morning behavior."* That's the same shape as the menu-vs-cut pattern but one level up — instead of "pick one rewrite per beat," the critic wants "give the rep their new pitch top to bottom." Possible instruction: when overall_impression diagnoses a rubric-clean-with-tactical-issues pitch, end with one full rewritten version the rep can read aloud Monday. Risk: too prescriptive for weak/mid where the rep needs to do the work themselves. Probably gates on rubric satisfaction, like the v3 praise-inflation guard.
+
 ### 2026-04-25 — Coaching prompt iteration v3: praise-inflation guard moves the strong pitch +3
 
 Second iteration off the red-team roadmap. Pattern 5 (praise inflation when the rubric is satisfied) was the dominant gap on the strong demo pitch and was made worse in v2 by a posture-as-strength celebration line. So I added a single instruction to `overall_impression`: when the rubric is fully satisfied, look one layer deeper for tactical issues a senior coach would catch — founder-voice vocabulary, proof points that telegraph early-stage, surveilling-vs-researched lines, pitching where discovery is needed. Examples drawn directly from the v2 critic's strong-pitch critique. Honesty escape hatch built in so genuinely excellent pitches don't get manufactured criticism.
