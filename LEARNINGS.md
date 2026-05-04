@@ -20,6 +20,22 @@ Everything downstream — the "no cheerleading" copy, the evidence-and-highlight
 
 ## Ships log
 
+### 2026-05-04 — Video recording + visual coaching: qualitative feedback instead of arbitrary numbers
+
+Shipped video as a recording option (Phase 1, [`ba35c3a`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/ba35c3a)) and Claude-multimodal visual coaching (Phase 2, [`f86981a`](https://github.com/IanHSDavis/elevator-pitch-evaluator/commit/f86981a)) on the same day.
+
+**The Highspot pain this addresses.** Highspot's pitch-evaluation product has a visual mode, but its visual feedback is a blunt percentage — "speaker was in frame for 87% of the recording." That number does two jobs at once and neither well: it isn't specific enough to act on (what does "in frame" tell me about my actual delivery?), and it telegraphs a precision the underlying signal doesn't carry (did I get docked because my camera is at chest height, or because I leaned forward at second 47?). The metric satisfies the "we have video coaching" feature line without giving the rep anything they can do differently next week.
+
+**The shape here is different.** Three visual rubric dimensions — Presence, Eye Contact, Delivery Confidence — each with the same E/M/D level structure as the audio dims, but with concrete coaching language. The eval reads like *"Your eyes are aimed at a point below the camera in three of four frames — looks like you're reading from your monitor. Stick a sticky note above the lens with your three pitch beats so your gaze stays on-axis."* Not a number. A move.
+
+**Coached, not scored — the design choice.** The visual dims do not contribute to the overall /100. Three reasons documented in `src/lib/rubric.ts`: (1) frame-based judgment is noisier than transcript-based — lighting, camera angle, and the four-frame sample window all introduce variance the audio rubric isn't subject to, (2) the score baseline was calibrated on transcript-only inputs and silently re-anchoring it would break what the calibration check compares against, (3) the value is the coaching note, not the grade. The results page header reads "Visual Dimensions · Coached, not scored" with a one-line caption that says the same thing in plain English; visual rows show only the level badge, not the `/5` subscore or weight % chips that audio rows show.
+
+**Cost mitigations baked in from day 1, not bolted on.** Per the saved video plan: 4 keyframes (not 6–8), 640×480 (not native webcam res), visual rubric block in the cached system prompt. Each frame is ~410 tokens at the smaller size vs ~1230 at 1280×720 — a 3× per-frame reduction with no quality regression for presence-class judgments. Estimated ~$0.04–0.05 per video eval versus ~$0.03 for audio — a 30–50% bump, not a 2× spike. At portfolio-piece volume that's a few extra dollars a month.
+
+**The image-block ordering matters.** Anthropic's vision examples consistently put image blocks before the prompt text in the user message, and the model attends to them more reliably that way. The multimodal user message here is `[image, image, image, image, text(transcript)]`, not text-then-images.
+
+**Phase 1 had one ride-along fix that was educational.** Local `npm run dev` was silently failing — Claude Code exports `ANTHROPIC_API_KEY=` (empty) and `ANTHROPIC_BASE_URL` (custom endpoint) into its own shell so its SDK calls route correctly, and Next.js's `.env.local` loader respects already-set env vars even when they're empty strings. The dev server inherited those vars, the evaluate endpoint returned a 500 with "ANTHROPIC_API_KEY is not configured," and `OPENAI_API_KEY` from the same file loaded fine — which made it look like a single-key config bug rather than an env-precedence one. The `dev` script now runs under `env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL` so the file values win regardless of which shell launches it. README documents the why for anyone forking.
+
 ### 2026-04-25 — Coaching prompt iteration v4: one-cut instruction closes pattern 4 without moving the score
 
 Third iteration off the red-team roadmap. Pattern 4 ("menus instead of cuts") was the dominant remaining gap across all three v3 critiques — coaching kept handing the rep "e.g. ..." or "X or Y" rewrites where a senior coach would pick the single highest-leverage line and commit. So I added a one-line instruction to the per-dimension `coaching` field: when you'd otherwise list multiple rewrites, make the cut, give one specific line they can run Monday morning, and stop hedging. Lives in `coaching` rather than `overall_impression` to keep the prompt-engineering surface tidy (overall_impression now handles posture + praise-inflation; coaching handles specificity + decisiveness).
@@ -280,6 +296,12 @@ These are the specific "I hit this wall commercially; here's the fix" moments. E
 **Highspot's version:** the option to re-record after feedback was a small, easy-to-miss trashcan icon. Users often didn't realize they could just try again — which broke the whole coaching loop pedagogically.
 
 **Here:** "Record Again →" sits on the results footer as the primary action, right next to Copy Report. The top-of-page `← Back to record` link also handles the return path. The iterate-and-improve loop is the whole point of a coaching tool; it should be the most visible thing on the results screen.
+
+### 4. Visual coaching is qualitative, not a percentage
+
+**Highspot's version:** visual evaluation reduced to a blunt metric — e.g. "speaker was in frame 87% of the recording." Either too vague to act on or telegraphing a precision the underlying signal can't actually carry. Reps walk away knowing a number; they don't walk away knowing what to do differently.
+
+**Here:** three visual rubric dimensions (Presence, Eye Contact, Delivery Confidence), each with a level + an evidence note tied to what's literally visible in the keyframes ("eyes aimed below the camera in three of four frames") + a concrete next move ("stick a sticky note above the lens"). The level is informational; the coaching is the deliverable. Visual dims are deliberately excluded from the overall /100 so frame-based variance can't move the score — the score stays anchored to the transcript-calibrated baseline and the visual feedback rides alongside as qualitative coaching.
 
 ---
 
