@@ -1,7 +1,7 @@
 import { ImageResponse } from "next/og";
 
 export const alt =
-  "Elevator Pitch Evaluator — record a pitch, get coaching against a five-dimension rubric.";
+  "Elevator Pitch Evaluator — record audio or video, get coaching against a rubric with visual delivery notes for video.";
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
 
@@ -136,7 +136,7 @@ export default async function Image() {
           >
             <span>Target 60–90s</span>
             <span>Whisper · transcribe</span>
-            <span>Claude · evaluate</span>
+            <span>Claude · text + vision</span>
           </div>
         </div>
 
@@ -168,7 +168,7 @@ export default async function Image() {
               maxWidth: 720,
             }}
           >
-            Record a pitch. Get blunt coaching — no cheerleading.
+            Record audio or video. Get blunt coaching — no cheerleading.
           </div>
           <div
             style={{

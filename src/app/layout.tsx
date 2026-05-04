@@ -28,11 +28,11 @@ export const metadata: Metadata = {
   metadataBase: new URL("https://elevator-pitch-evaluator.vercel.app"),
   title: "Elevator Pitch Evaluator",
   description:
-    "Record a sixty-second pitch. We transcribe it, score it against a five-dimension rubric, and hand back blunt coaching notes.",
+    "Record a sixty-second elevator pitch in audio or video. Get blunt, rubric-anchored coaching — including visual delivery notes when you record video.",
   openGraph: {
     title: "Elevator Pitch Evaluator",
     description:
-      "Record a pitch. Get blunt coaching — no cheerleading.",
+      "Record audio or video. Get blunt coaching — no cheerleading.",
     type: "website",
     url: "https://elevator-pitch-evaluator.vercel.app",
   },
@@ -40,7 +40,7 @@ export const metadata: Metadata = {
     card: "summary_large_image",
     title: "Elevator Pitch Evaluator",
     description:
-      "Record a pitch. Get blunt coaching — no cheerleading.",
+      "Record audio or video. Get blunt coaching — no cheerleading.",
   },
 };
 
