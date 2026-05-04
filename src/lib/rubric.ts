@@ -133,7 +133,7 @@ export const TIMING = {
   weight: 0.1,
   title: "Timing",
   shortLabel: "Timing",
-  shortSub: "Within the window.",
+  shortSub: "Aim for 60–90 seconds.",
   summary:
     "Pitch falls inside the 45–90 second target window. Auto-scored from measured audio duration.",
   descriptors: {

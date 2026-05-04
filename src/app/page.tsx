@@ -9,6 +9,7 @@ import {
   LEVEL_PALETTE,
   PERFORMANCE_LEVELS,
   TIMING,
+  VISUAL_DIMENSIONS,
   type PerformanceLevel,
 } from "@/lib/rubric";
 import {
@@ -666,7 +667,7 @@ function LandingScreen({
   return (
     <main className="fade-in">
       <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
-        A Coaching Instrument · v0.4
+        A Coaching Instrument · v0.6
       </div>
 
       <div className="mt-7 grid grid-cols-[1fr_auto] gap-10 items-end max-sm:grid-cols-1 max-sm:gap-6">
@@ -682,17 +683,22 @@ function LandingScreen({
           <br />
           Whisper · transcribe
           <br />
-          Claude · evaluate
+          Claude · text + vision
         </div>
       </div>
 
-      <p className="mt-7 max-w-[48ch] text-[18px] leading-[1.55] font-light text-ink-dim m-0">
-        Record an elevator pitch. We transcribe it, score it against a
-        five-dimension rubric, and hand back blunt coaching notes — line by
-        line. No cheerleading.
+      <p className="mt-7 max-w-[58ch] text-[18px] leading-[1.55] font-light text-ink-dim m-0">
+        Record an elevator pitch — audio or video. We score five rubric
+        dimensions and hand back blunt coaching notes line by line. Video
+        adds three visual delivery dimensions — Presence, Eye Contact,
+        Delivery Confidence — coached alongside the score. No cheerleading.
       </p>
 
       <RubricStrip />
+
+      <p className="mt-3.5 font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint">
+        + 3 visual dimensions in video mode · coached, not scored
+      </p>
 
       <MatrixAccordion
         id="rubric"
@@ -778,7 +784,7 @@ function LandingScreen({
       )}
 
       <div className="mt-[100px] pt-8 border-t border-line-soft flex justify-between items-end gap-6 font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint max-sm:flex-col max-sm:items-start max-sm:gap-3">
-        <div>Ver 0.5.0 · Built for practice, not performance.</div>
+        <div>Ver 0.6.0 · Built for practice, not performance.</div>
         <div>claude-opus-4-7</div>
       </div>
     </main>
@@ -793,7 +799,11 @@ function RubricStrip() {
       sub: d.shortSub,
     })),
     {
-      num: "05",
+      // Timing labeled "00" — matches the results page and the Matrix
+      // accordion, where the meta/auto-scored dim sits separately from the
+      // 1..N coaching dims. Also keeps room for the visual rubric (05-07)
+      // to extend the numbering without collision.
+      num: "00",
       title: TIMING.shortLabel,
       sub: TIMING.shortSub,
     },
@@ -995,33 +1005,75 @@ function Matrix() {
     { text: "Meets", cls: "text-meets" },
     { text: "Developing", cls: "text-dev" },
   ];
-  const rows = [
+  const audioRows = [
     ...DIMENSIONS.map((d) => ({
       num: String(d.index).padStart(2, "0"),
       title: d.title,
       cells: PERFORMANCE_LEVELS.map((lvl) => d.descriptors[lvl]),
     })),
     {
-      num: "05",
+      // Timing is the meta/auto-scored dim — same "00" label the results
+      // page uses, distinct from the 1..N coaching dims. Also avoids a
+      // numbering collision with the visual rubric below (which starts at
+      // 05/06/07 to continue from the four audio coaching dims).
+      num: "00",
       title: TIMING.title,
       cells: PERFORMANCE_LEVELS.map((lvl) => TIMING.descriptors[lvl]),
     },
   ];
+  const visualRows = VISUAL_DIMENSIONS.map((d) => ({
+    num: String(d.index).padStart(2, "0"),
+    title: d.title,
+    cells: PERFORMANCE_LEVELS.map((lvl) => d.descriptors[lvl]),
+  }));
 
   return (
-    <div className="grid grid-cols-[minmax(150px,1fr)_1.6fr_1.6fr_1.6fr] border-t border-line-soft max-[820px]:grid-cols-1">
-      {headers.map((h) => (
-        <div
-          key={h.text}
-          className={`font-mono text-[10.5px] tracking-[0.16em] uppercase font-medium py-3.5 pr-5 ${h.cls} first:pl-0 max-[820px]:hidden`}
-        >
-          {h.text}
-        </div>
-      ))}
-      {rows.map((row) => (
-        <RowCells key={row.num} row={row} />
-      ))}
-    </div>
+    <>
+      {/* Section header for the scored audio rubric */}
+      <div className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-ink-faint py-2.5">
+        Scored — audio + timing
+      </div>
+
+      <div className="grid grid-cols-[minmax(150px,1fr)_1.6fr_1.6fr_1.6fr] border-t border-line-soft max-[820px]:grid-cols-1">
+        {headers.map((h) => (
+          <div
+            key={h.text}
+            className={`font-mono text-[10.5px] tracking-[0.16em] uppercase font-medium py-3.5 pr-5 ${h.cls} first:pl-0 max-[820px]:hidden`}
+          >
+            {h.text}
+          </div>
+        ))}
+        {audioRows.map((row) => (
+          <RowCells key={row.num} row={row} />
+        ))}
+      </div>
+
+      {/* Section header for the qualitative-only visual rubric. The
+          "coached, not scored" framing matches the wording used on the
+          results page so users see the same vocabulary in both places. */}
+      <div className="font-mono text-[10.5px] tracking-[0.16em] uppercase text-ink-faint pt-9 pb-2.5">
+        Coached, not scored — video mode only
+      </div>
+      <p className="text-[13px] leading-[1.55] text-ink-mute pb-3 max-w-[68ch]">
+        When you record video, four keyframes are read by Claude alongside
+        the transcript. These three dimensions land as delivery coaching;
+        they don&apos;t move the score.
+      </p>
+
+      <div className="grid grid-cols-[minmax(150px,1fr)_1.6fr_1.6fr_1.6fr] border-t border-line-soft max-[820px]:grid-cols-1">
+        {headers.map((h) => (
+          <div
+            key={`v-${h.text}`}
+            className={`font-mono text-[10.5px] tracking-[0.16em] uppercase font-medium py-3.5 pr-5 ${h.cls} first:pl-0 max-[820px]:hidden`}
+          >
+            {h.text}
+          </div>
+        ))}
+        {visualRows.map((row) => (
+          <RowCells key={row.num} row={row} />
+        ))}
+      </div>
+    </>
   );
 }
 
