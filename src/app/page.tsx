@@ -32,8 +32,12 @@ type Screen =
   | "error";
 type ProcessingStep = 0 | 1 | 2 | 3 | 4; // 4 = all done
 
+type RecordingMode = "audio" | "video";
+
 // Max recording length. Whisper caps uploads at 25 MB — at typical WebM/Opus
-// bitrates, ~3 minutes is the safe ceiling.
+// bitrates, ~3 minutes is the safe ceiling. (Note: in video mode we record
+// a SECOND, audio-only MediaRecorder for transcription, so the video bitrate
+// doesn't impact this cap — what gets uploaded is still the audio-only blob.)
 const RECORDING_HARD_CUTOFF_SECONDS = 180;
 // Floor below which the pitch is too short to coach on meaningfully.
 const MIN_PITCH_SECONDS = 8;
@@ -60,13 +64,28 @@ type ErrorState = {
 type RetryContext = {
   audioBlob: Blob;
   durationSeconds: number;
-  audioUrl: string;
+  playbackUrl: string;
+  recordingMode: RecordingMode;
 } | null;
 
 export default function Home() {
   const [screen, setScreen] = useState<Screen>("landing");
+  // recordingMode is the user's pre-recording choice (audio | video). It
+  // determines the getUserMedia constraints AND how we render playback.
+  const [recordingMode, setRecordingMode] = useState<RecordingMode>("audio");
+  // The audio-only blob — always present after a successful recording. This
+  // is what we POST to /api/transcribe regardless of mode, because Whisper
+  // works best on clean audio and our 25 MB upload cap is easier to satisfy
+  // for audio than for video at any reasonable bitrate.
   const [audioBlob, setAudioBlob] = useState<Blob | null>(null);
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  // The playback URL the Results screen renders. In audio mode this points
+  // at the audio blob; in video mode it points at the video+audio blob.
+  // One URL field, so cleanup is simple — revoke it on reset and we're done.
+  const [playbackUrl, setPlaybackUrl] = useState<string | null>(null);
+  // Live MediaStream during recording — RecordingScreen reads this to render
+  // the camera preview tile in video mode. Null in audio mode.
+  const [videoPreviewStream, setVideoPreviewStream] =
+    useState<MediaStream | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [result, setResult] = useState<EvaluationResult | null>(null);
   const [processingStep, setProcessingStep] = useState<ProcessingStep>(0);
@@ -74,9 +93,18 @@ export default function Home() {
   const [landingError, setLandingError] = useState<ErrorState | null>(null);
   const retryRef = useRef<RetryContext>(null);
 
-  const recorderRef = useRef<MediaRecorder | null>(null);
+  // Two recorders, two chunk buffers. In audio mode only audioRecorder is
+  // active; videoRecorder is left null. Splitting them this way means the
+  // audio path stays bit-for-bit identical to v0.5 in audio mode, with no
+  // risk of regressing what Whisper sees.
+  const audioRecorderRef = useRef<MediaRecorder | null>(null);
+  const videoRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const videoChunksRef = useRef<Blob[]>([]);
+  // Captured at recording start so onstop handlers know which mode they're
+  // in even if the user toggles state somewhere else mid-recording. Defensive.
+  const recordingModeAtStartRef = useRef<RecordingMode>("audio");
   const startedAtRef = useRef<number>(0);
   const tickerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const procFakeTimersRef = useRef<ReturnType<typeof setTimeout>[]>([]);
@@ -85,15 +113,16 @@ export default function Home() {
     return () => {
       if (tickerRef.current) clearInterval(tickerRef.current);
       streamRef.current?.getTracks().forEach((t) => t.stop());
-      if (audioUrl) URL.revokeObjectURL(audioUrl);
+      if (playbackUrl) URL.revokeObjectURL(playbackUrl);
       procFakeTimersRef.current.forEach(clearTimeout);
     };
-  }, [audioUrl]);
+  }, [playbackUrl]);
 
   function resetAll() {
-    if (audioUrl) URL.revokeObjectURL(audioUrl);
+    if (playbackUrl) URL.revokeObjectURL(playbackUrl);
     setAudioBlob(null);
-    setAudioUrl(null);
+    setPlaybackUrl(null);
+    setVideoPreviewStream(null);
     setElapsedSeconds(0);
     setResult(null);
     setErrorState(null);
@@ -104,51 +133,112 @@ export default function Home() {
     procFakeTimersRef.current = [];
   }
 
-  const startRecording = useCallback(async () => {
-    resetAll();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      const mimeType = pickMimeType();
-      const recorder = new MediaRecorder(
-        stream,
-        mimeType ? { mimeType } : undefined,
-      );
-      recorderRef.current = recorder;
-      chunksRef.current = [];
+  const startRecording = useCallback(
+    async (mode: RecordingMode) => {
+      resetAll();
+      recordingModeAtStartRef.current = mode;
+      try {
+        // Video constraints stay modest — 640×480 is plenty for Phase 2
+        // visual coaching keyframes and keeps the live preview cheap.
+        const stream = await navigator.mediaDevices.getUserMedia(
+          mode === "video"
+            ? {
+                audio: true,
+                video: { width: { ideal: 640 }, height: { ideal: 480 } },
+              }
+            : { audio: true },
+        );
+        streamRef.current = stream;
 
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        const type = mimeType || "audio/webm";
-        const blob = new Blob(chunksRef.current, { type });
-        setAudioBlob(blob);
-        setAudioUrl(URL.createObjectURL(blob));
-      };
+        // === Audio recorder — always created. This is the bytes that go to
+        // Whisper, regardless of whether we're also recording video.
+        const audioMime = pickAudioMimeType();
+        // In video mode, derive an audio-only MediaStream so the audio
+        // MediaRecorder doesn't pull video frames it would just discard.
+        const audioStream =
+          mode === "video"
+            ? new MediaStream(stream.getAudioTracks())
+            : stream;
+        const audioRecorder = new MediaRecorder(
+          audioStream,
+          audioMime ? { mimeType: audioMime } : undefined,
+        );
+        audioRecorderRef.current = audioRecorder;
+        audioChunksRef.current = [];
+        audioRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) audioChunksRef.current.push(event.data);
+        };
+        audioRecorder.onstop = () => {
+          const type = audioMime || "audio/webm";
+          const blob = new Blob(audioChunksRef.current, { type });
+          setAudioBlob(blob);
+          // In audio mode the audio blob IS the playback source.
+          if (recordingModeAtStartRef.current === "audio") {
+            setPlaybackUrl(URL.createObjectURL(blob));
+          }
+        };
 
-      recorder.start();
-      startedAtRef.current = Date.now();
-      setScreen("recording");
-      tickerRef.current = setInterval(() => {
-        const elapsed = (Date.now() - startedAtRef.current) / 1000;
-        setElapsedSeconds(elapsed);
-        // Hard cutoff at 3 minutes — Whisper's 25MB upload cap.
-        if (elapsed >= RECORDING_HARD_CUTOFF_SECONDS) {
-          onStopAndEvaluate();
+        // === Video recorder — only when the user picked video.
+        if (mode === "video") {
+          const videoMime = pickVideoMimeType();
+          const videoRecorder = new MediaRecorder(
+            stream,
+            videoMime ? { mimeType: videoMime } : undefined,
+          );
+          videoRecorderRef.current = videoRecorder;
+          videoChunksRef.current = [];
+          videoRecorder.ondataavailable = (event) => {
+            if (event.data.size > 0) videoChunksRef.current.push(event.data);
+          };
+          videoRecorder.onstop = () => {
+            const type = videoMime || "video/webm";
+            const blob = new Blob(videoChunksRef.current, { type });
+            setPlaybackUrl(URL.createObjectURL(blob));
+          };
+          // Set the live stream so RecordingScreen can render a preview.
+          setVideoPreviewStream(stream);
         }
-      }, 80);
-    } catch (err) {
-      setLandingError(classifyMicError(err));
-    }
+
+        // Start audio first — order matters only if the system clock skews,
+        // but recording the audio cleanly is the more important signal.
+        audioRecorder.start();
+        videoRecorderRef.current?.start();
+        startedAtRef.current = Date.now();
+        setScreen("recording");
+        tickerRef.current = setInterval(() => {
+          const elapsed = (Date.now() - startedAtRef.current) / 1000;
+          setElapsedSeconds(elapsed);
+          // Hard cutoff at 3 minutes — Whisper's 25MB upload cap.
+          if (elapsed >= RECORDING_HARD_CUTOFF_SECONDS) {
+            onStopAndEvaluate();
+          }
+        }, 80);
+      } catch (err) {
+        setLandingError(classifyMicError(err));
+      }
+    },
+    // resetAll and onStopAndEvaluate are stable closures over component
+    // state we want fresh on each call. Re-creating startRecording on every
+    // render would be churn — prefer the stale-closure tradeoff here.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    [],
+  );
 
   const stopRecording = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
+    if (
+      audioRecorderRef.current &&
+      audioRecorderRef.current.state !== "inactive"
+    ) {
+      audioRecorderRef.current.stop();
+    }
+    if (
+      videoRecorderRef.current &&
+      videoRecorderRef.current.state !== "inactive"
+    ) {
+      videoRecorderRef.current.stop();
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
+    setVideoPreviewStream(null);
     if (tickerRef.current) {
       clearInterval(tickerRef.current);
       tickerRef.current = null;
@@ -158,8 +248,17 @@ export default function Home() {
   }, []);
 
   const cancelRecording = useCallback(() => {
-    if (recorderRef.current && recorderRef.current.state !== "inactive") {
-      recorderRef.current.stop();
+    if (
+      audioRecorderRef.current &&
+      audioRecorderRef.current.state !== "inactive"
+    ) {
+      audioRecorderRef.current.stop();
+    }
+    if (
+      videoRecorderRef.current &&
+      videoRecorderRef.current.state !== "inactive"
+    ) {
+      videoRecorderRef.current.stop();
     }
     streamRef.current?.getTracks().forEach((t) => t.stop());
     if (tickerRef.current) {
@@ -293,15 +392,18 @@ export default function Home() {
 
   function onStopAndEvaluate() {
     const elapsed = (Date.now() - startedAtRef.current) / 1000;
+    const mode = recordingModeAtStartRef.current;
     stopRecording();
-    // Wait one tick so onstop fires and audioBlob is ready.
+    // Wait one tick so onstop fires and the audio blob is finalized. We
+    // rebuild from chunks here as a defensive fallback in case React state
+    // hasn't flushed by the time we read audioBlob.
     setTimeout(() => {
-      const blob = chunksRef.current.length
-        ? new Blob(chunksRef.current, {
-            type: recorderRef.current?.mimeType || "audio/webm",
-          })
+      const audioMime =
+        audioRecorderRef.current?.mimeType || "audio/webm";
+      const audio = audioChunksRef.current.length
+        ? new Blob(audioChunksRef.current, { type: audioMime })
         : audioBlob;
-      if (!blob) {
+      if (!audio) {
         setLandingError({
           kind: "too_short",
           title: "No audio captured",
@@ -322,15 +424,31 @@ export default function Home() {
         setScreen("landing");
         return;
       }
-      // Remember what we captured so the error-screen retry can reuse it.
-      const url = URL.createObjectURL(blob);
+
+      // Build the playback URL from whichever blob matches the mode the user
+      // chose. This URL drives the player on the Results screen — audio mode
+      // gets <audio>, video mode gets <video>, both rendered from this one
+      // URL field.
+      let playbackBlob: Blob = audio;
+      if (mode === "video") {
+        const videoMime =
+          videoRecorderRef.current?.mimeType || "video/webm";
+        if (videoChunksRef.current.length) {
+          playbackBlob = new Blob(videoChunksRef.current, {
+            type: videoMime,
+          });
+        }
+      }
+      const url = URL.createObjectURL(playbackBlob);
+
       retryRef.current = {
-        audioBlob: blob,
-        audioUrl: url,
+        audioBlob: audio,
+        playbackUrl: url,
         durationSeconds: elapsed,
+        recordingMode: mode,
       };
       runFullPipeline({
-        audioBlobForTranscribe: blob,
+        audioBlobForTranscribe: audio,
         presetTranscript: null,
         durationSeconds: elapsed,
       });
@@ -382,7 +500,9 @@ export default function Home() {
       {screen === "landing" && (
         <LandingScreen
           error={landingError}
-          onStart={startRecording}
+          recordingMode={recordingMode}
+          onModeChange={setRecordingMode}
+          onStart={() => startRecording(recordingMode)}
           onDemo={onDemoPitch}
           onUpload={onUploadAudio}
         />
@@ -391,6 +511,8 @@ export default function Home() {
       {screen === "recording" && (
         <RecordingScreen
           elapsedSeconds={elapsedSeconds}
+          recordingMode={recordingModeAtStartRef.current}
+          videoPreviewStream={videoPreviewStream}
           onCancel={cancelRecording}
           onStop={onStopAndEvaluate}
         />
@@ -403,12 +525,17 @@ export default function Home() {
       {screen === "results" && result && (
         <ResultsScreen
           result={result}
-          audioUrl={audioUrl}
+          playbackUrl={playbackUrl}
+          // Drives whether we render <audio> or <video> on the results page.
+          // History entries don't carry a playback blob, so the field can be
+          // null even when recordingMode says "video" — the player block
+          // gates on playbackUrl, not mode.
+          playbackMode={recordingModeAtStartRef.current}
           onBack={() => {
             resetAll();
             setScreen("landing");
           }}
-          onRecordAgain={startRecording}
+          onRecordAgain={() => startRecording(recordingMode)}
         />
       )}
 
@@ -484,11 +611,15 @@ function BrandMark() {
 
 function LandingScreen({
   error,
+  recordingMode,
+  onModeChange,
   onStart,
   onDemo,
   onUpload,
 }: {
   error: ErrorState | null;
+  recordingMode: RecordingMode;
+  onModeChange: (mode: RecordingMode) => void;
   onStart: () => void;
   onDemo: (id: DemoPitchId) => void;
   onUpload: (file: File) => void;
@@ -536,14 +667,16 @@ function LandingScreen({
 
       <div className="mt-[88px] grid grid-cols-2 gap-14 items-center max-[820px]:grid-cols-1 max-[820px]:gap-10">
         <div className="flex flex-col items-start gap-7">
+          <ModeToggle value={recordingMode} onChange={onModeChange} />
           <RecordButton onClick={onStart} />
           <div className="flex flex-col gap-2.5">
             <div className="font-serif text-[40px] leading-[1.02] tracking-[-0.01em]">
               Press to <em className="text-ink-dim">record.</em>
             </div>
             <div className="text-[13.5px] text-ink-mute max-w-[34ch] leading-[1.5]">
-              Grant microphone access when asked. Stop any time — we'll only
-              judge what you give us.
+              {recordingMode === "video"
+                ? "Grant microphone and camera access when asked. The video stays in your browser — only audio is sent for transcription."
+                : "Grant microphone access when asked. Stop any time — we'll only judge what you give us."}
             </div>
           </div>
           <div className="flex flex-col gap-3 mt-1.5">
@@ -655,6 +788,46 @@ function RubricStrip() {
   );
 }
 
+function ModeToggle({
+  value,
+  onChange,
+}: {
+  value: RecordingMode;
+  onChange: (mode: RecordingMode) => void;
+}) {
+  const opts: { id: RecordingMode; label: string }[] = [
+    { id: "audio", label: "Audio" },
+    { id: "video", label: "Video" },
+  ];
+  return (
+    <div
+      role="radiogroup"
+      aria-label="Recording mode"
+      className="inline-flex border border-line rounded-full p-[3px] gap-[2px]"
+    >
+      {opts.map((o) => {
+        const active = value === o.id;
+        return (
+          <button
+            key={o.id}
+            type="button"
+            role="radio"
+            aria-checked={active}
+            onClick={() => onChange(o.id)}
+            className={`px-4 py-2 rounded-full font-mono text-[10.5px] tracking-[0.14em] uppercase transition-colors duration-150 cursor-pointer border-0 ${
+              active
+                ? "bg-ink text-bg"
+                : "bg-transparent text-ink-dim hover:text-ink"
+            }`}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function RecordButton({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -673,11 +846,16 @@ function RecordButton({ onClick }: { onClick: () => void }) {
 function SpecsTable() {
   const rows = [
     { k: "Length", v: "60–90 seconds", e: "· ±15s tolerated" },
-    { k: "Format", v: "Spoken pitch", e: "· one take" },
+    { k: "Format", v: "Audio or video", e: "· one take" },
     {
       k: "Privacy",
       v: "Audio to Whisper, transcript to Claude",
       e: "· shared with the tool author for testing and calibration",
+    },
+    {
+      k: "Video",
+      v: "Stays in your browser",
+      e: "· playback only · never uploaded",
     },
     { k: "Scoring", v: "Exceeds · Meets · Developing", e: null },
     {
@@ -842,10 +1020,14 @@ function RowCells({
 
 function RecordingScreen({
   elapsedSeconds,
+  recordingMode,
+  videoPreviewStream,
   onCancel,
   onStop,
 }: {
   elapsedSeconds: number;
+  recordingMode: RecordingMode;
+  videoPreviewStream: MediaStream | null;
   onCancel: () => void;
   onStop: () => void;
 }) {
@@ -855,12 +1037,15 @@ function RecordingScreen({
   const msText = `.${String(ms).padStart(2, "0")}`;
   const fillPct = Math.min(100, (elapsedSeconds / 90) * 100);
 
+  const isVideo = recordingMode === "video";
+  const liveLabel = isVideo ? "Recording · Cam + Mic Live" : "Recording · Mic Live";
+
   return (
     <main className="fade-in mt-16">
       <div className="flex items-center gap-3.5 mb-12">
         <div className="w-2.5 h-2.5 rounded-full animate-pulse-soft bg-[oklch(0.68_0.16_25)]" />
         <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-dim">
-          Recording · Mic Live
+          {liveLabel}
         </div>
         <div className="ml-auto font-serif text-[72px] leading-none tracking-[-0.02em] tabular-nums">
           {timerText}
@@ -870,7 +1055,15 @@ function RecordingScreen({
         </div>
       </div>
 
-      <Waveform />
+      {/* Video mode: live camera preview replaces the audio waveform.
+          We mirror the preview (transform: scaleX) so the user sees a
+          mirror-image of themselves the way a webcam app does — recording
+          itself is NOT mirrored, only the on-screen feedback. */}
+      {isVideo && videoPreviewStream ? (
+        <CameraPreview stream={videoPreviewStream} />
+      ) : (
+        <Waveform />
+      )}
 
       <div className="flex justify-between items-center font-mono text-[11px] tracking-[0.14em] uppercase text-ink-mute mt-10 max-sm:flex-col max-sm:items-start max-sm:gap-3">
         <div className="flex gap-2.5 items-center">
@@ -898,6 +1091,35 @@ function RecordingScreen({
         </Button>
       </div>
     </main>
+  );
+}
+
+function CameraPreview({ stream }: { stream: MediaStream }) {
+  // React doesn't accept MediaStream directly as a JSX prop on <video>, so
+  // we attach via ref + useEffect. The preview is muted to avoid feedback
+  // (the mic is open; routing it through speakers would echo).
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  useEffect(() => {
+    const el = videoRef.current;
+    if (!el) return;
+    el.srcObject = stream;
+    return () => {
+      // Don't stop the stream's tracks here — the parent owns the lifetime.
+      // We only detach the element so it doesn't keep a reference.
+      if (el) el.srcObject = null;
+    };
+  }, [stream]);
+
+  return (
+    <div className="my-10 border border-line-soft rounded overflow-hidden bg-bg-elev">
+      <video
+        ref={videoRef}
+        autoPlay
+        playsInline
+        muted
+        className="block w-full h-[320px] object-cover [transform:scaleX(-1)] bg-black max-sm:h-[240px]"
+      />
+    </div>
   );
 }
 
@@ -1030,12 +1252,14 @@ function ProcessingScreen({ step }: { step: ProcessingStep }) {
 
 function ResultsScreen({
   result,
-  audioUrl,
+  playbackUrl,
+  playbackMode,
   onBack,
   onRecordAgain,
 }: {
   result: EvaluationResult;
-  audioUrl: string | null;
+  playbackUrl: string | null;
+  playbackMode: RecordingMode;
   onBack: () => void;
   onRecordAgain: () => void;
 }) {
@@ -1195,9 +1419,26 @@ function ResultsScreen({
           <span className="ml-auto max-sm:ml-0">Click to jump to the note</span>
         </div>
 
-        {audioUrl && (
+        {playbackUrl && (
           <div className="mt-7 p-6 bg-bg-elev border border-line-soft rounded flex items-center gap-5">
-            <audio controls src={audioUrl} className="w-full" preload="metadata" />
+            {playbackMode === "video" ? (
+              // The recorded video plays back un-mirrored (i.e. the way a
+              // viewer would see the user during a real pitch). Only the
+              // live preview during recording was mirrored.
+              <video
+                controls
+                src={playbackUrl}
+                className="w-full max-h-[420px] bg-black"
+                preload="metadata"
+              />
+            ) : (
+              <audio
+                controls
+                src={playbackUrl}
+                className="w-full"
+                preload="metadata"
+              />
+            )}
           </div>
         )}
       </section>
@@ -1627,13 +1868,33 @@ function ErrorScreen({
 
 /* ---------------------------- Helpers ---------------------------- */
 
-function pickMimeType(): string {
+function pickAudioMimeType(): string {
   if (typeof window === "undefined") return "";
   const candidates = [
     "audio/webm;codecs=opus",
     "audio/webm",
     "audio/mp4",
     "audio/ogg;codecs=opus",
+  ];
+  for (const t of candidates) {
+    if (MediaRecorder.isTypeSupported(t)) return t;
+  }
+  return "";
+}
+
+function pickVideoMimeType(): string {
+  if (typeof window === "undefined") return "";
+  // Prefer VP9 for compression, fall back through VP8 to MP4. The audio
+  // codec is opus where supported — matters less here since we record audio
+  // separately for Whisper anyway, but keeps playback clean.
+  const candidates = [
+    "video/webm;codecs=vp9,opus",
+    "video/webm;codecs=vp8,opus",
+    "video/webm;codecs=vp9",
+    "video/webm;codecs=vp8",
+    "video/webm",
+    "video/mp4;codecs=h264,aac",
+    "video/mp4",
   ];
   for (const t of candidates) {
     if (MediaRecorder.isTypeSupported(t)) return t;

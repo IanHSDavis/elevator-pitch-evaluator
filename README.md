@@ -38,6 +38,8 @@ npm run dev
 
 Open [http://localhost:3000](http://localhost:3000).
 
+> **Note on the `dev` script:** it's prefixed with `env -u ANTHROPIC_API_KEY -u ANTHROPIC_BASE_URL` so that any `ANTHROPIC_*` values inherited from the parent shell (e.g. when the dev server is launched from inside Claude Code, which exports its own SDK config) get stripped before Next.js loads `.env.local`. Without this, an empty/unrelated shell value would silently override the file. Harmless when those vars aren't set.
+
 ## Status
 
 Early MVP. Audio capture → transcription → evaluation pipeline under construction. Public repo so you can watch it come together.
