@@ -8,6 +8,14 @@ export const maxDuration = 120;
 const RequestSchema = z.object({
   transcript: z.string().min(1, "transcript is required"),
   durationSeconds: z.number().positive("durationSeconds must be > 0"),
+  // Optional. When present must be exactly 4 base64-encoded JPEG frames
+  // (no data URL prefix). The server enforces the count here rather than
+  // letting it surface as a Claude error — bad inputs should fail at the
+  // boundary, not mid-pipeline.
+  videoFrames: z
+    .array(z.string().min(1))
+    .length(4, "videoFrames, when provided, must contain exactly 4 frames")
+    .optional(),
 });
 
 export async function POST(request: Request) {

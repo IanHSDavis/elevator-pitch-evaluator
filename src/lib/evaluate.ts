@@ -9,12 +9,19 @@ import {
   scoreTiming,
   subscoreForLevel,
   TIMING,
+  VISUAL_DIMENSIONS,
   verdictLevel,
   type DimensionKey,
   type PerformanceLevel,
   type TimingResult,
+  type VisualDimensionKey,
 } from "./rubric";
-import { PitchEvaluationSchema, type PitchEvaluation } from "./schemas";
+import {
+  PitchEvaluationSchema,
+  PitchEvaluationVideoSchema,
+  type PitchEvaluation,
+  type PitchEvaluationVideo,
+} from "./schemas";
 
 const MODEL = "claude-opus-4-7";
 
@@ -47,6 +54,13 @@ function buildSystemPrompt(): string {
     return `### ${dim.title} (\`${dim.key}\`)\n${dim.summary}\n\n${levels}`;
   }).join("\n\n");
 
+  const visualDimensionText = VISUAL_DIMENSIONS.map((dim) => {
+    const levels = PERFORMANCE_LEVELS.map(
+      (level) => `- **${LEVEL_LABELS[level]}**: ${dim.descriptors[level]}`,
+    ).join("\n");
+    return `### ${dim.title} (\`${dim.key}\`)\n${dim.summary}\n\n${levels}`;
+  }).join("\n\n");
+
   return `You are an expert pitch coach reviewing a recorded elevator pitch. Your job is to give the speaker precise, actionable coaching against a fixed rubric — in an editorial, no-cheerleading voice.
 
 You are warm but direct. You pay close attention to what the speaker actually said and you quote or paraphrase their specific language when giving feedback. You never give generic advice. Your tone is that of a thoughtful, experienced coach writing a single-page readout.
@@ -56,6 +70,19 @@ You are warm but direct. You pay close attention to what the speaker actually sa
 You evaluate four dimensions. Each has three performance levels: \`exceeds\` (strongest), \`meets\` (present and functional), \`developing\` (the growth area). Specificity and clarity are baked into each level's descriptor.
 
 ${dimensionText}
+
+## Visual rubric (only when keyframes are provided)
+
+When the user message includes 4 video keyframes, you ALSO evaluate three visual dimensions. The keyframes are evenly spaced across the recording (start → end). Score each visual dimension by examining the frames as a set, not in isolation. If no keyframes are provided, do not return visual dimensions at all — they apply only when video was recorded.
+
+${visualDimensionText}
+
+### Calibration for visual dims
+
+- Be **literal** about what you can see. If you can't see hands in any keyframe, do not assert "hands fidget" — the absence of evidence is not evidence of absence. Default to **meets** for confidence when hands are out of frame entirely.
+- The keyframes are 4 *moments*, not video. Do not infer motion. "Eyes wandering" requires multiple frames showing different gaze directions; a single off-axis glance is not enough on its own.
+- Lighting and camera quality are NOT scored. Focus on what the speaker is doing, not the production value of the recording.
+- If the speaker is partially out of frame in one keyframe (e.g., leaning over to adjust something), do not penalize Presence on that single frame alone. Look at the modal frame.
 
 Timing is scored separately from the actual audio duration and is not part of your job. Do not mention pitch length, pacing, or audio duration in your feedback.
 
@@ -103,10 +130,18 @@ Default to **developing** when the closing words require the listener to do the 
 
 ## What to return per dimension
 
+### Audio dimensions
+
 1. **level** — \`exceeds\`, \`meets\`, or \`developing\`. Apply the calibration rules above; when torn, default to the lower level. You do **not** return a numeric subscore — the client derives it from the level.
 2. **evidence** — a short quote or close paraphrase that supports the level. Must refer to something actually said. If a dimension is entirely absent, say so plainly (e.g., "No explicit next step is offered.").
 3. **highlight** — the exact phrase from the transcript to highlight in-line. Copy it verbatim — the client matches it against the transcript and wraps it with a <mark> tag to create a clickable cross-reference to your coaching. Pick the single most emblematic phrase for this dimension. If there's no good single phrase (e.g., the dimension is completely absent), return an empty string.
 4. **coaching** — two to four sentences. Specific. Tied to the speaker's actual language. Suggest a concrete next move. Never use phrases like "consider adding specificity" without showing what that looks like. When you'd otherwise hand the rep multiple rewrites ("e.g. ...", "or ...", "consider X or Y"), make the cut: pick the single rewrite you'd give them verbatim and commit to it. Reps don't need optionality from their coach — they need one specific line they can run Monday morning and iterate from. If multiple rewrites are plausible, the senior-coach move is to choose, not to hedge.
+
+### Visual dimensions (only when keyframes are provided)
+
+1. **level** — same three-level scale; same "default to the lower level when torn" rule.
+2. **evidence** — what you can literally observe in the frames (e.g., "eyes aimed at a point below the camera in 3 of 4 frames", "open posture, hands gesturing at chest height across the keyframes"). No speculation about audio, pacing, or things you can't see in a still.
+3. **coaching** — two to three sentences, tied to the visual tells you observed. Concrete next move (camera height suggestion, where to place a sticky note on the lens during practice, hand placement). Same no-hedging rule as audio: pick one move they can run tomorrow.
 
 ## And overall
 
@@ -127,6 +162,10 @@ const SYSTEM_PROMPT = buildSystemPrompt();
 export type EvaluationInput = {
   transcript: string;
   durationSeconds: number;
+  // Optional. When present, must be exactly 4 base64-encoded JPEG frames
+  // (no data URL prefix), evenly spaced from start to end of the recording.
+  // Triggers multimodal evaluation including visual rubric scoring.
+  videoFrames?: string[];
 };
 
 export type DimensionResult = {
@@ -142,6 +181,20 @@ export type DimensionResult = {
   coaching: string;
 };
 
+// Visual results have the same shape minus `highlight` (no transcript phrase
+// to anchor to). The `index` continues from audio dims (5/6/7).
+export type VisualDimensionResult = {
+  key: VisualDimensionKey;
+  index: number;
+  title: string;
+  shortLabel: string;
+  level: PerformanceLevel;
+  subscore: number;
+  weight: number;
+  evidence: string;
+  coaching: string;
+};
+
 export type EvaluationResult = {
   verdict: string;
   verdictLevel: PerformanceLevel;
@@ -150,6 +203,10 @@ export type EvaluationResult = {
   overallScore: number; // 0..100
   transcript: string;
   dimensions: DimensionResult[];
+  // Optional: only present when video frames were evaluated. Audio-only
+  // results omit this field entirely so existing UI paths can continue to
+  // assume `result.dimensions` is the complete dimension list.
+  visualDimensions?: VisualDimensionResult[];
   timing: TimingResult & { weight: number; subscore: number; title: string };
   model: string;
   usage: {
@@ -168,11 +225,46 @@ export async function evaluatePitch(
   // The SDK applies exponential backoff between retries.
   const client = new Anthropic({ maxRetries: 4 });
 
-  const userMessage = `Here is the pitch transcript to evaluate. Coach the speaker against the rubric.
+  const hasFrames = !!input.videoFrames && input.videoFrames.length > 0;
 
-<transcript>
+  // Build the user message. In audio mode it's plain text; in video mode it's
+  // a multimodal content array — 4 image blocks (the keyframes) followed by
+  // a single text block with the transcript and instruction. Image blocks
+  // come FIRST because Anthropic's vision examples consistently put images
+  // before the prompt text and the model attends to them more reliably that
+  // way.
+  const transcriptText = `<transcript>
 ${input.transcript.trim()}
 </transcript>`;
+
+  const userMessage: Anthropic.MessageParam = hasFrames
+    ? {
+        role: "user",
+        content: [
+          ...input.videoFrames!.map(
+            (data): Anthropic.ImageBlockParam => ({
+              type: "image",
+              source: {
+                type: "base64",
+                media_type: "image/jpeg",
+                data,
+              },
+            }),
+          ),
+          {
+            type: "text",
+            text: `Here is the pitch transcript and 4 video keyframes (start to end of the recording). Coach the speaker against the rubric — both audio dimensions and the visual dimensions described in the system prompt.
+
+${transcriptText}`,
+          },
+        ],
+      }
+    : {
+        role: "user",
+        content: `Here is the pitch transcript to evaluate. Coach the speaker against the rubric.
+
+${transcriptText}`,
+      };
 
   let response;
   try {
@@ -182,7 +274,9 @@ ${input.transcript.trim()}
       thinking: { type: "adaptive" },
       output_config: {
         effort: "high",
-        format: zodOutputFormat(PitchEvaluationSchema),
+        format: zodOutputFormat(
+          hasFrames ? PitchEvaluationVideoSchema : PitchEvaluationSchema,
+        ),
       },
       system: [
         {
@@ -191,7 +285,7 @@ ${input.transcript.trim()}
           cache_control: { type: "ephemeral" },
         },
       ],
-      messages: [{ role: "user", content: userMessage }],
+      messages: [userMessage],
     });
   } catch (err: unknown) {
     // Surface raw error to server logs; user-facing message is rewritten
@@ -215,13 +309,17 @@ ${input.transcript.trim()}
     throw err;
   }
 
-  const parsed: PitchEvaluation | null = response.parsed_output;
+  const parsed: PitchEvaluation | PitchEvaluationVideo | null =
+    response.parsed_output;
   if (!parsed) {
     throw new Error(
       `Claude returned an unparseable response (stop_reason: ${response.stop_reason}).`,
     );
   }
 
+  // Audio dimensions: same shape and same weights in both modes. Visual
+  // scoring does NOT compress audio weights — the transcript-based score
+  // stays comparable across audio-only and video pitches.
   const dimensions: DimensionResult[] = DIMENSIONS.map((dim) => {
     const entry = parsed[dim.key];
     return {
@@ -238,6 +336,26 @@ ${input.transcript.trim()}
     };
   });
 
+  // Visual dimensions only exist on PitchEvaluationVideo. We narrow via
+  // hasFrames rather than a type guard since the schemas already encoded
+  // the presence/absence by which one was chosen above.
+  const visualDimensions: VisualDimensionResult[] | undefined = hasFrames
+    ? VISUAL_DIMENSIONS.map((vdim) => {
+        const entry = (parsed as PitchEvaluationVideo)[vdim.key];
+        return {
+          key: vdim.key,
+          index: vdim.index,
+          title: vdim.title,
+          shortLabel: vdim.shortLabel,
+          level: entry.level,
+          subscore: subscoreForLevel(entry.level),
+          weight: vdim.weight,
+          evidence: entry.evidence,
+          coaching: entry.coaching,
+        };
+      })
+    : undefined;
+
   const timingBase = scoreTiming(input.durationSeconds);
   const timing = {
     ...timingBase,
@@ -249,6 +367,10 @@ ${input.transcript.trim()}
   const dimensionLevels = Object.fromEntries(
     dimensions.map((d) => [d.key, d.level]),
   ) as Record<DimensionKey, PerformanceLevel>;
+
+  // Visual dim levels are computed but deliberately NOT passed to
+  // overallScore / countMetDimensions — visual scoring is qualitative
+  // coaching only. See VISUAL_DIMENSIONS in rubric.ts for rationale.
 
   const overall = overallScore({
     dimensionLevels,
@@ -265,6 +387,7 @@ ${input.transcript.trim()}
     overallScore: overall,
     transcript: input.transcript.trim(),
     dimensions,
+    visualDimensions,
     timing,
     model: MODEL,
     usage: {

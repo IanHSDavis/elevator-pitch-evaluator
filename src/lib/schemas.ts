@@ -22,6 +22,26 @@ const DimensionEvaluation = z.object({
     ),
 });
 
+// Visual dims have a different evidence/highlight contract: nothing to quote
+// from a transcript, so `evidence` describes what's *visible in the frames*
+// and `highlight` is omitted (no transcript phrase to anchor to). Coaching
+// stays in the same voice.
+const VisualDimensionEvaluation = z.object({
+  level: z.enum(PERFORMANCE_LEVELS).describe(
+    "Performance level for this visual dimension, picked by examining the 4 keyframes.",
+  ),
+  evidence: z
+    .string()
+    .describe(
+      "What's actually visible in the keyframes that supports the chosen level. One to two short observations. Must refer to things you can literally see in the frames (e.g., 'eyes aimed below the camera in 3 of 4 frames', 'open posture across all four frames'). Do not speculate about audio or pacing.",
+    ),
+  coaching: z
+    .string()
+    .describe(
+      "Two to three sentences of concrete coaching tied to the specific visual tells you observed. Suggest a concrete next move (camera height, lighting position, where to look during practice, hand placement). Never generic advice.",
+    ),
+});
+
 export const PitchEvaluationSchema = z.object({
   verdict: z
     .string()
@@ -39,5 +59,19 @@ export const PitchEvaluationSchema = z.object({
   call_to_action: DimensionEvaluation,
 });
 
+// Same as the audio-only schema plus three visual dimensions. Used when video
+// keyframes are part of the input — Claude is shown the frames and is
+// expected to score visual presence/eye contact/delivery confidence in
+// addition to the four audio-coachable dims.
+export const PitchEvaluationVideoSchema = PitchEvaluationSchema.extend({
+  presence: VisualDimensionEvaluation,
+  eye_contact: VisualDimensionEvaluation,
+  delivery_confidence: VisualDimensionEvaluation,
+});
+
 export type PitchEvaluation = z.infer<typeof PitchEvaluationSchema>;
+export type PitchEvaluationVideo = z.infer<typeof PitchEvaluationVideoSchema>;
 export type DimensionEvaluation = z.infer<typeof DimensionEvaluation>;
+export type VisualDimensionEvaluation = z.infer<
+  typeof VisualDimensionEvaluation
+>;

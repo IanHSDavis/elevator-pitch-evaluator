@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EvaluationResult } from "@/lib/evaluate";
+import { extractKeyframes } from "@/lib/frames";
 import {
   DIMENSIONS,
   LEVEL_LABELS,
@@ -63,6 +64,10 @@ type ErrorState = {
 
 type RetryContext = {
   audioBlob: Blob;
+  // In video mode the recorded video is also stored on the retry context so
+  // the error-screen "Try again" button can re-extract frames without asking
+  // the user to record a second take.
+  videoBlob: Blob | null;
   durationSeconds: number;
   playbackUrl: string;
   recordingMode: RecordingMode;
@@ -274,6 +279,11 @@ export default function Home() {
     audioBlobForTranscribe: Blob | null;
     presetTranscript: string | null;
     durationSeconds: number;
+    // Optional. When provided, frames are extracted client-side and sent
+    // to /api/evaluate so Claude can score the visual rubric. Only applies
+    // when the user recorded video; demo pitches and audio uploads always
+    // pass null here.
+    videoBlobForFrames?: Blob | null;
   }) {
     setErrorState(null);
     setResult(null);
@@ -347,6 +357,26 @@ export default function Home() {
         });
       }
 
+      // For video mode, extract 4 keyframes BEFORE the evaluate call so we
+      // can send them in the POST body. This typically adds ~500ms-1s; it
+      // happens silently while the processing UI shows step 1 (parsing).
+      // If extraction throws, fall back gracefully to a text-only eval —
+      // a partial score is better than no score at all.
+      let videoFrames: string[] | undefined;
+      if (args.videoBlobForFrames) {
+        try {
+          const frames = await extractKeyframes(args.videoBlobForFrames);
+          videoFrames = frames.map((f) => f.base64);
+        } catch (err) {
+          console.warn(
+            "Keyframe extraction failed; falling back to audio-only evaluation:",
+            err,
+          );
+          // Non-fatal: continue without frames. The visual dims won't be
+          // scored on this run, but the audio coaching will still ship.
+        }
+      }
+
       // Fire off evaluate; during its wait, step UI advances on fake timers.
       procFakeTimersRef.current.push(
         setTimeout(() => setProcessingStep(2), 600),
@@ -359,6 +389,7 @@ export default function Home() {
         body: JSON.stringify({
           transcript,
           durationSeconds: args.durationSeconds,
+          ...(videoFrames ? { videoFrames } : {}),
         }),
       });
       const evaluateData = await evaluateRes.json();
@@ -428,21 +459,25 @@ export default function Home() {
       // Build the playback URL from whichever blob matches the mode the user
       // chose. This URL drives the player on the Results screen — audio mode
       // gets <audio>, video mode gets <video>, both rendered from this one
-      // URL field.
+      // URL field. We hold onto videoBlob separately because frame extraction
+      // (for visual scoring) needs the actual blob, not just a URL.
       let playbackBlob: Blob = audio;
+      let videoBlob: Blob | null = null;
       if (mode === "video") {
         const videoMime =
           videoRecorderRef.current?.mimeType || "video/webm";
         if (videoChunksRef.current.length) {
-          playbackBlob = new Blob(videoChunksRef.current, {
+          videoBlob = new Blob(videoChunksRef.current, {
             type: videoMime,
           });
+          playbackBlob = videoBlob;
         }
       }
       const url = URL.createObjectURL(playbackBlob);
 
       retryRef.current = {
         audioBlob: audio,
+        videoBlob,
         playbackUrl: url,
         durationSeconds: elapsed,
         recordingMode: mode,
@@ -451,6 +486,7 @@ export default function Home() {
         audioBlobForTranscribe: audio,
         presetTranscript: null,
         durationSeconds: elapsed,
+        videoBlobForFrames: videoBlob,
       });
     }, 100);
   }
@@ -466,6 +502,7 @@ export default function Home() {
       audioBlobForTranscribe: ctx.audioBlob,
       presetTranscript: null,
       durationSeconds: ctx.durationSeconds,
+      videoBlobForFrames: ctx.videoBlob,
     });
   }
 
@@ -854,13 +891,13 @@ function SpecsTable() {
     },
     {
       k: "Video",
-      v: "Stays in your browser",
-      e: "· playback only · never uploaded",
+      v: "4 keyframes to Claude for visual scoring",
+      e: "· full recording stays in your browser, never uploaded",
     },
     { k: "Scoring", v: "Exceeds · Meets · Developing", e: null },
     {
       k: "Output",
-      v: "Transcript · 5 dimension scores · coaching notes",
+      v: "Transcript · scores per dimension · coaching notes",
       e: null,
     },
   ];
@@ -1508,6 +1545,58 @@ function ResultsScreen({
           ))}
         </div>
       </section>
+
+      {/* Visual dimensions — coached but not scored. Section header makes
+          this explicit; row treatment drops the /5 subscore and weight %
+          chips that the audio rows show, leaving only the level badge as a
+          qualitative anchor (Exceeds / Meets / Developing). */}
+      {result.visualDimensions && result.visualDimensions.length > 0 && (
+        <section>
+          <div className="flex justify-between items-baseline pt-9 pb-4.5 border-b border-line-soft">
+            <div className="font-mono text-[11px] tracking-[0.16em] uppercase text-ink-mute">
+              Visual Dimensions · Coached, not scored
+            </div>
+            <div className="font-mono text-[11px] tracking-[0.12em] text-ink-faint">
+              Read from 4 keyframes of your recording
+            </div>
+          </div>
+
+          <p className="text-[13.5px] leading-[1.55] text-ink-mute max-w-[70ch] pt-5">
+            These don't roll into your overall score — frame-based reads have
+            more variance than transcript-based ones, so they're for delivery
+            coaching, not grading. Take the notes, ignore the chip if it's
+            harsh.
+          </p>
+
+          <div className="pt-2">
+            {result.visualDimensions.map((vdim) => (
+              <div
+                key={vdim.key}
+                id={`row-${vdim.index}`}
+                className="grid grid-cols-[34px_1fr_auto] gap-7 py-8 border-b border-line-soft items-start max-sm:grid-cols-[28px_1fr] max-sm:grid-rows-[auto_auto]"
+              >
+                <div className="font-mono text-[11px] text-ink-faint tracking-[0.12em] pt-1">
+                  {String(vdim.index).padStart(2, "0")}
+                </div>
+                <div className="flex flex-col gap-3.5 min-w-0">
+                  <div className="text-[22px] font-medium leading-[1.2] tracking-[-0.01em]">
+                    {vdim.title}
+                  </div>
+                  <div className="text-[14px] text-ink-dim italic leading-[1.55] border-l-2 border-line pl-3.5">
+                    {vdim.evidence}
+                  </div>
+                  <div className="text-[15px] leading-[1.6] text-ink max-w-[68ch]">
+                    {vdim.coaching}
+                  </div>
+                </div>
+                <div className="flex flex-col items-end gap-2.5 max-sm:col-span-2 max-sm:flex-row max-sm:items-center">
+                  <Badge level={vdim.level} />
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       <MatrixAccordion
         eyebrow="Reference · Full Rubric"

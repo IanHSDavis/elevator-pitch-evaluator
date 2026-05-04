@@ -22,6 +22,14 @@ export type DimensionKey =
   | "value_proposition"
   | "call_to_action";
 
+// Visual dims are scored only when the user records video. Their keys live in
+// a separate union so that audio-mode results can be typed without referencing
+// fields that won't be present.
+export type VisualDimensionKey =
+  | "presence"
+  | "eye_contact"
+  | "delivery_confidence";
+
 export type DimensionDefinition = {
   key: DimensionKey;
   index: number; // 1..4 — stable numbering used as highlight ref
@@ -29,7 +37,18 @@ export type DimensionDefinition = {
   shortLabel: string; // 2–3 word strip label, e.g. "Opening & Credibility"
   shortSub: string; // 3–6 word caption, e.g. "Who you are, why listen."
   summary: string; // longer prose for system prompt
-  weight: number; // 0..1, sums with TIMING.weight to 1.0
+  weight: number; // 0..1, sums with TIMING.weight to 1.0 (audio-only mode)
+  descriptors: Record<PerformanceLevel, string>;
+};
+
+export type VisualDimensionDefinition = {
+  key: VisualDimensionKey;
+  index: number; // 5..7 — continues numbering from audio dims
+  title: string;
+  shortLabel: string;
+  shortSub: string;
+  summary: string;
+  weight: number; // 0..1, applies only when video is provided
   descriptors: Record<PerformanceLevel, string>;
 };
 
@@ -126,6 +145,81 @@ export const TIMING = {
   },
 } as const;
 
+// Visual dims are evaluated from 4 evenly-spaced keyframes extracted from the
+// recorded video. Critically, they are **coached but NOT scored** — they do
+// not contribute to the overall /100 number and do not appear in the
+// "X of Y dimensions meet" count. Three reasons:
+//
+// 1. Frame-based judgments are noisier than transcript-based ones. Lighting,
+//    camera angle, and the four-frame sample window introduce variance that
+//    the audio rubric (which works from a fixed transcript) doesn't have.
+// 2. The scoring baseline was calibrated on transcript-only inputs (see
+//    studies/2026-04-23-calibration). Folding visual scoring into the
+//    overall would re-anchor the baseline silently and break the
+//    calibration DAG's drift detection.
+// 3. The visual coaching IS the value — not the grade. The point is to give
+//    the speaker a concrete delivery note ("aim eyes at the lens, not the
+//    monitor below"), not to dock 7 points off their score.
+//
+// `weight` on these definitions is therefore intentionally 0. We keep the
+// field for shape-compatibility with DimensionDefinition; nothing reads it.
+export const VISUAL_DIMENSIONS: VisualDimensionDefinition[] = [
+  {
+    key: "presence",
+    index: 5,
+    title: "Presence",
+    shortLabel: "Presence",
+    shortSub: "How you fill the frame.",
+    summary:
+      "Whether the speaker fills the frame purposefully — posture, framing, energy that registers visually before words land. Evaluated from the 4 keyframes as a whole.",
+    weight: 0,
+    descriptors: {
+      exceeds:
+        "Speaker fills the frame purposefully — head and shoulders well-composed, posture upright and engaged, energy reads visibly across multiple frames.",
+      meets:
+        "Speaker is properly framed and stably present, even if energy is neutral. Nothing about the visual presentation distracts from the words.",
+      developing:
+        "Off-center framing, slumped or closed posture, low visible energy, or framing that crops the speaker awkwardly (chin cut off, room ceiling dominating).",
+    },
+  },
+  {
+    key: "eye_contact",
+    index: 6,
+    title: "Eye Contact",
+    shortLabel: "Eye Contact",
+    shortSub: "Looking at the lens.",
+    summary:
+      "Whether the speaker's gaze is on the camera lens (proxy for buyer eye contact) versus reading notes off-screen, looking down, or letting eyes drift mid-thought. The single biggest tell of 'this is internalized' versus 'I'm reading.'",
+    weight: 0,
+    descriptors: {
+      exceeds:
+        "Eyes are aimed at the lens in all or nearly all keyframes — gaze direct, brief natural breaks only.",
+      meets:
+        "Eyes are camera-aimed in most keyframes, with at most one frame showing a glance away. Reads as engaged.",
+      developing:
+        "Gaze frequently away from the lens — reading off a screen below the camera, looking down at notes, eyes wandering. Reads as 'reciting' or 'unrehearsed.'",
+    },
+  },
+  {
+    key: "delivery_confidence",
+    index: 7,
+    title: "Delivery Confidence",
+    shortLabel: "Delivery Confidence",
+    shortSub: "Body language tells.",
+    summary:
+      "Whether visible body language telegraphs ownership of the pitch. Open posture, hands visible and used intentionally, lack of nervous tells. Distinct from vocal confidence — only what a still frame can show.",
+    weight: 0,
+    descriptors: {
+      exceeds:
+        "Open posture, hands visible and intentionally used (gesturing in frame), no visible nervous tells across the keyframes — the speaker looks like they own the room.",
+      meets:
+        "Settled posture, no distracting motion, hands either visibly at rest or gesturing without fidget. The frame doesn't actively undermine confidence even if it doesn't project it.",
+      developing:
+        "Closed or guarded posture, hands hidden or fidgeting, visible nervous tells (touching face, adjusting clothing, swaying out of frame). Body undermines what the words are trying to say.",
+    },
+  },
+];
+
 export type TimingResult = {
   level: PerformanceLevel;
   durationSeconds: number;
@@ -192,6 +286,9 @@ export const timingSubscore = subscoreForLevel;
 
 // Overall /100 = Σ (subscore / 5) × weight × 100.
 // Subscores are derived from per-dimension levels via subscoreForLevel.
+// Visual dims are intentionally NOT included here — see the comment block on
+// VISUAL_DIMENSIONS for why. The score stays anchored to the calibrated
+// transcript-only baseline whether or not video was recorded.
 export function overallScore(args: {
   dimensionLevels: Record<DimensionKey, PerformanceLevel>;
   timingLevel: PerformanceLevel;
@@ -205,7 +302,10 @@ export function overallScore(args: {
   return Math.round(total * 100);
 }
 
-// Count how many dimensions landed at "meets" or "exceeds".
+// Count how many dimensions landed at "meets" or "exceeds". Visual dims are
+// excluded — they aren't part of the "X of Y dimensions meet" verdict line
+// because they don't contribute to the score. Their per-dim levels show up
+// in the visual section of the results page on their own.
 export function countMetDimensions(
   dimensionLevels: Record<DimensionKey, PerformanceLevel>,
   timingLevel: PerformanceLevel,
