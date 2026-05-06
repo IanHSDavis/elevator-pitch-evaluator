@@ -783,7 +783,23 @@ function LandingScreen({
         </div>
       )}
 
-      <div className="mt-[100px] pt-8 border-t border-line-soft flex justify-between items-end gap-6 font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint max-sm:flex-col max-sm:items-start max-sm:gap-3">
+      <section className="mt-[100px] pt-8 border-t border-line-soft">
+        <div className="font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint mb-3">
+          Privacy
+        </div>
+        <p className="text-[13.5px] leading-[1.55] text-ink-mute max-w-[68ch]">
+          Nothing is stored on the server. Audio goes to OpenAI Whisper for
+          transcription; the transcript and (in video mode) four keyframes go
+          to Anthropic Claude for evaluation. Both run zero-retention by
+          default — recordings aren&rsquo;t kept after the request returns. Your
+          history lives only in your browser&rsquo;s localStorage. An anonymous
+          copy of the transcript and scores (no name, no account, no IP) is
+          emailed to the tool author for calibration; reach out if you&rsquo;d
+          rather opt out.
+        </p>
+      </section>
+
+      <div className="mt-12 flex justify-between items-end gap-6 font-mono text-[10.5px] tracking-[0.14em] uppercase text-ink-faint max-sm:flex-col max-sm:items-start max-sm:gap-3">
         <div>Ver 0.6.0 · Built for practice, not performance.</div>
         <div>claude-opus-4-7</div>
       </div>
