@@ -40,3 +40,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# calibration fixtures (recorded video frames — never check in faces)
+/.calibration/
